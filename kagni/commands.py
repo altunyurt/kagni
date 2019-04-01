@@ -1,4 +1,5 @@
 from time import monotonic_ns as monotonic_ns_time
+from functools import lru_cache
 from functools import wraps
 from math import ceil
 import logging
@@ -15,6 +16,27 @@ log.addHandler(logging.StreamHandler())
 
 
 NULL = b"$-1\r\n"
+
+
+class Wrapper:
+    def __init__(self, *args):
+        self.casters = {"bytes_to_int": lambda arg: int(arg), "bytes_to_str": lambda arg: arg.decode()}
+
+    def __call__(self, f):
+        @wraps(f)
+        def inner(*args, **kwargs):
+            args_list = []
+            for name, arg in zip(f.__code__.co_varnames, args):
+
+                _type = f.__annotations__.get(name)
+
+                if _type and _type != bytes:
+                    arg = self.casters[f"bytes_to_{_type.__name__}"](arg)
+
+                args_list.append(arg)
+            return f(*args_list, **kwargs)
+
+        return inner
 
 
 class Command:
@@ -42,9 +64,9 @@ class Command:
     def command(self, *args):
         return b"+OK\r\n"
 
-    def set_(self, *args):
-        (key, val) = args[:2]
+    def set_(self, key: bytes, val:bytes):
         self.data[key] = val
+
         return b"+OK\r\n"
 
     def mset(self, *args):
@@ -73,7 +95,8 @@ class Command:
                 cnt += 1
         return cnt
 
-    def expire(self, key: bytes, secs: int) -> int:
+    @Wrapper()
+    def expire(self, key: bytes, secs: int):
         if key not in self.data:
             return b":0\r\n"
 
@@ -88,17 +111,17 @@ class Command:
             return b":-1\r\n"
 
         expires_at = self.expires.get(key)
-        ttl = ceil(expires_at - monotonic_ns_time())
+        ttl = ceil((expires_at - monotonic_ns_time()) / (10 ** 9))
         return (":%s\r\n" % ttl).encode() if ttl >= 0 else b":-2\r\n"
 
     def keys(self, pattern):
         filter(self.data.keys())
 
     def ping(self):
-        return b"PONG"
+        return b"+PONG\r\n"
 
-    def setbit(self, key, bit, val):
-        bit, val = int(bit), int(val)
+    @Wrapper()
+    def setbit(self, key: bytes, bit: int, val: int):
 
         ex_val = 0
         bmap = self.data.get(key, BitMap())
@@ -114,14 +137,16 @@ class Command:
             bmap.remove(bit)
         return (":%s\r\n" % ex_val).encode()
 
-    def getbit(self, key, bit):
+    @Wrapper()
+    def getbit(self, key: bytes, bit: int):
         if key not in self.data:
-            return b':0\r\n'
+            return b":0\r\n"
 
         retval = 1 if int(bit) in self.data[key] else 0
         return f":{retval}\r\n".encode()
 
-    def bitop(self, op, dest_name, *keys):
+    @Wrapper()
+    def bitop(self, op: bytes, dest_name: bytes, *keys):
         op = op.lower()
         maps = [self.data.get(key, BitMap()) for key in keys]
 

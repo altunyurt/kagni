@@ -4,8 +4,8 @@ import asyncio
 import uvloop
 import hiredis
 import logging
+from collections import deque
 from kagni.commands import Command
-import collections
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
@@ -14,11 +14,12 @@ log.addHandler(logging.StreamHandler())
 
 cmd = Command()
 
+
 # her bağlantıda çağrılıyor bu
 class RedisServerProtocol(asyncio.Protocol):
     def __init__(self):
         self.parser = hiredis.Reader()
-        self.response = collections.deque()
+        self.response = deque()
 
     def connection_made(self, transport):
         self.transport = transport
