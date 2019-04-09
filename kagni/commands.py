@@ -1,14 +1,14 @@
-from time import monotonic_ns as monotonic_ns_time
+from collections import defaultdict
+from collections import deque
 from functools import lru_cache
+from functools import partial
+from functools import reduce
 from functools import wraps
 from math import ceil
-import logging
-from types import GeneratorType
-from collections import deque
-from collections import defaultdict
 from pyroaring import BitMap
-from functools import reduce
-from functools import partial
+from time import monotonic_ns as monotonic_ns_time
+from types import GeneratorType
+import logging
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -64,7 +64,7 @@ class Command:
     def command(self, *args):
         return b"+OK\r\n"
 
-    def set_(self, key: bytes, val:bytes):
+    def set_(self, key: bytes, val: bytes):
         self.data[key] = val
 
         return b"+OK\r\n"
