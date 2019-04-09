@@ -1,11 +1,13 @@
 # /usr/bin/env python
 
-import asyncio
-import uvloop
+#import asyncio
+#import uvloop
+import trio
 import hiredis
 import logging
 from collections import deque
 from kagni.commands import Command
+from kagni.db import db 
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
@@ -15,57 +17,61 @@ log.addHandler(logging.StreamHandler())
 cmd = Command()
 
 
-# her bağlantıda çağrılıyor bu
-class RedisServerProtocol(asyncio.Protocol):
-    def __init__(self):
-        self.parser = hiredis.Reader()
-        self.response = deque()
+async def protocolHandler(stream):
+    # print("handler cra")
+    parser = hiredis.Reader()
+    response = deque()
 
-    def connection_made(self, transport):
-        self.transport = transport
+    while True:
+        data = await stream.receive_some(16254)
+        await stream.send_all(b"+OK\r\n")
+        continue 
 
-    def data_received(self, data):
-        self.parser.feed(data)
+        parser.feed(data)
+        req = parser.gets()
 
-        while True:
-            resp = b''
-            req = self.parser.gets()
-
-            # log.debug(f"DBG: {req}")
-            if req is False:
-                break
-
-            cmd_text = req[0].upper()
-            command = cmd.commands.get(cmd_text)
-            if not command:
-                resp = f"-Unknown command {cmd_text}\r\n".encode()
-            else:
-                resp = command(*req[1:])
-            self.response.append(resp)
-
-        self.transport.writelines(self.response)
-        self.response.clear()
+        # log.debug(f"DBG: {req}")
+        if req is False:
+            '''henüz veri yok ya da henüz parse edilmiş veri yok'''
+            break
+        
+        #print('veri', req)
+        cmd_text = req[0].upper()
+        command = cmd.commands.get(cmd_text)
+        if not command:
+            resp = f"-Unknown command {cmd_text}\r\n".encode()
+        else:
+            resp = command(*req[1:])
+        response.append(resp)
+        #print ('response', response)
+        await stream.send_all(b"".join(response))
+        response.clear()
 
 
-def main(hostname="localhost", port=6380):
-    uvloop.install()
-    loop = asyncio.get_event_loop()
-    coro = loop.create_server(RedisServerProtocol, hostname, port)
-    server = loop.run_until_complete(coro)
+        
+
+# dump database periodically 
+async def dumper():
+    while True:
+        db.dump()
+        await trio.sleep(10)  # secs
+
+async def main(hostname="localhost", port=6380):
     print("Listening on port {}".format(port))
+
     try:
-        loop.run_forever()
+
+        await trio.serve_tcp(protocolHandler, port, host=hostname)
+        print("gğıgğı")
     except KeyboardInterrupt:
         print("User requested shutdown.")
     finally:
-        server.close()
-        loop.run_until_complete(server.wait_closed())
-        loop.close()
+        #loop.run_until_complete(loop.create_task(dumper()))
         print("Redis is now ready to exit.")
     return 0
 
 
 if __name__ == "__main__":
-    main()
+    trio.run(main)
 
 # vim: set syntax=python
