@@ -56,9 +56,12 @@ class Command:
             b"COMMAND": self.command,
             b"DEL": self.del_,
             b"KEYS": self.keys,
+            # bitops 
             b"SETBIT": self.setbit,
-            b"BITOP": self.bitop,
             b"GETBIT": self.getbit,
+            b"BITOP": self.bitop,
+            b"BITCOUNT": self.bitcount,
+            b"BITPOS": self.bitpos
         }
 
     def command(self, *args):
@@ -120,6 +123,9 @@ class Command:
     def ping(self):
         return b"+PONG\r\n"
 
+
+    ###############
+    ## BIT ops 
     @Wrapper()
     def setbit(self, key: bytes, bit: int, val: int):
 
@@ -158,3 +164,35 @@ class Command:
         }[op]()
 
         return f":{len(self.data[dest_name])}\r\n".encode()
+
+    def bitcount(self, key: bytes):
+        if key not in self.data:
+            return b":0\r\n"
+        cnt = len(self.data[key])
+        return f":{cnt}\r\n".encode()
+
+
+    def bitpos(self, key: bytes, bit: bytes):
+        retval = b':-1\r\n'
+        
+        if key not in self.data:
+            return retval 
+
+        data = self.data[key]
+
+        if not len(data):
+            if bit == b'1':
+                retval = b':-1\r\n'
+            else:
+                retval = b':0\r\n'
+
+        else:
+            if bit == b'1':
+                retval = f':{data.min()}\r\n'.encode()
+            else:
+                _data = data ^ BitMap(range(data.max() + 1 ))
+                retval = f':{_data.min()}\r\n'.encode()
+        return retval 
+
+
+

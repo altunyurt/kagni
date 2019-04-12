@@ -23,9 +23,9 @@ async def protocolHandler(stream):
     response = deque()
 
     while True:
-        data = await stream.receive_some(16254)
-        await stream.send_all(b"+OK\r\n")
-        continue 
+        data = await stream.receive_some(65535)
+        if not data:
+            return 
 
         parser.feed(data)
         req = parser.gets()
@@ -74,4 +74,4 @@ async def main(hostname="localhost", port=6380):
 if __name__ == "__main__":
     trio.run(main)
 
-# vim: set syntax=python
+# vim: set filetype=python
