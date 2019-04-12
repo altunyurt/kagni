@@ -61,7 +61,11 @@ class Command:
             b"GETBIT": self.getbit,
             b"BITOP": self.bitop,
             b"BITCOUNT": self.bitcount,
-            b"BITPOS": self.bitpos
+            b"BITPOS": self.bitpos,
+
+            #incr 
+            b"INCR": self.incr,
+            b"INCRBY": self.incrby
         }
 
     def command(self, *args):
@@ -78,12 +82,15 @@ class Command:
             self.set_(key, val)
         return b"+OK\r\n"
 
-    def get(self, key):
+    def get(self, key: bytes):
         val = self.data.get(key)
+        print("geet", key)
         if not val:
             return NULL
 
-        return b"+%s\r\n" % val
+        if isinstance(val, int):
+            return f":{val}\r\n".encode()
+        return f"+{val}\r\n".encode()
 
     def mget(self, *keys):
         arr = [self.get(key) for key in keys]
@@ -122,6 +129,19 @@ class Command:
 
     def ping(self):
         return b"+PONG\r\n"
+
+    @Wrapper()
+    def incrby(self, key:bytes, i: int):
+        val = self.data.get(key, 0)
+        val += i
+        self.data[key] = val 
+        return f':{val}\r\n'.encode()
+
+
+    def incr(self, key: bytes):
+        return self.incrby(key, 1)
+
+
 
 
     ###############
