@@ -1,7 +1,7 @@
 # kagni
 Kagni is a Redis-like data store. 
 
-Kagni - Kağnı in Turkish is a form of tumbrel, pulled by bullocks used to carry stuff in rural areas. It is slow as hell, but gets things done. Naming is due to it's ability to store stuff and load on / off   and it's sturdiness. 
+Kagni - Kağnı in Turkish is a form of tumbrel, pulled by bullocks used for carrying stuff in rural areas. It is slow as hell, but gets things done. Naming is due to its ability to store and load on / off stuff and also its sturdiness. 
 
 Performance will get better hopefully :) 
 
