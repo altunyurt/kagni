@@ -1,15 +1,13 @@
-from collections import defaultdict
 from collections import deque
-from functools import lru_cache
 from functools import partial
 from functools import reduce
 from functools import wraps
 from math import ceil
 from pyroaring import BitMap
 from time import monotonic_ns as monotonic_ns_time
-from types import GeneratorType
 import logging
 import inspect
+import re
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -19,6 +17,7 @@ log.addHandler(logging.StreamHandler())
 __all__ = ["COMMANDS"]
 
 CASTERS = {"bytes_to_int": lambda arg: int(arg), "bytes_to_str": lambda arg: arg.decode()}
+RE_NUMERIC = re.compile(b'^\d+$', re.ASCII)
 
 
 DATA = {}
@@ -30,6 +29,7 @@ SYM_CRLF = b"\r\n"
 OK = object()
 QUEUED = object()
 PONG = object()
+COMMAND = object()
 NIL = None
 
 
@@ -61,23 +61,23 @@ def _resp_dumps(value):
     if value is PONG:
         return [b"+PONG"]
 
-    if value is QUEUED:
-        return [b"+QUEUED"]
+    if value is COMMAND:
+        return [b"+COMMAND"]
 
     if isinstance(value, int):
-        return [b":" + str(value).encode()]
+        return [b":" + f'{value}'.encode()]
 
     if isinstance(value, str):
         value = value.encode()
 
     if isinstance(value, bytes):
-        return [b"$" + str(len(value)).encode(), value]
+        return [b"$" + f'{len(value)}'.encode(), value]
 
     if isinstance(value, Error):
-        return [b"-" + str(value.class_).encode() + b" " + str(value.message).encode()]
+        return [b"-" + f'{value.class_}'.encode() + b" " + f'{value.message}'.encode()]
 
     if isinstance(value, (list, tuple)):
-        result = [b"*" + str(len(value)).encode()]
+        result = [b"*" + f'{len(value)}'.encode()]
         for item in value:
             result.extend(_resp_dumps(item))
         return result
@@ -149,14 +149,13 @@ def _get(key: bytes):
 
 @register_command(b"MGET")
 def _mget(*keys):
-    return [_get(key, NIL) for key in keys]
+    return [DATA.get(key, NIL) for key in keys]
 
 
 @register_command(b"MSET")
 def _mset(*args):
     chunks = [args[i : i + 2] for i in range(0, len(args), 2)]
-    for (key, val) in chunks:
-        _set(key, val)
+    DATA.update(dict(chunks))
     return OK
 
 
@@ -199,15 +198,28 @@ def _keys(pattern):
 
 @register_command(b"INCRBY")
 def _incrby(key: bytes, i: int):
-    val = DATA.get(key, 0)
-    val += i
-    DATA[key] = val
+    val = b"0"
+    if key in DATA:
+        val = DATA[key]
+        if not RE_NUMERIC.match(val):
+            raise ERRORS.WRONGTYPE
+
+    val = int(val) + i
+    DATA[key] = f'{ val }'.encode()
     return val
 
 
 @register_command(b"INCR")
 def _incr(key: bytes):
-    return _incrby(key, 1)
+    val = b"0"
+    if key in DATA:
+        val = DATA[key]
+        if not RE_NUMERIC.match(val):
+            raise ERRORS.WRONGTYPE
+
+    val = int(val) + 1
+    DATA[key] = f'{ val }'.encode()
+    return val
 
 
 @register_command(b"GETRANGE")
@@ -233,14 +245,13 @@ def _setbit(key: bytes, bit: int, val: int):
         bmap.add(bit)
     elif ex_val:
         bmap.remove(bit)
-
     return ex_val
 
 
 @register_command(b"GETBIT")
 def _getbit(key: bytes, bit: int):
     if key not in DATA:
-        return b":0\r\n"
+        return 0
 
     return 1 if int(bit) in DATA[key] else 0
 
