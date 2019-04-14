@@ -1,60 +1,44 @@
 # /usr/bin/env python
 
-#import asyncio
-#import uvloop
 import trio
-import hiredis
 import logging
 from collections import deque
-from kagni.commands import Command
-from kagni.db import db 
+from kagni.commands import COMMANDS
+from kagni.db import db
+from kagni.parser import protocolParser 
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
 log.addHandler(logging.StreamHandler())
 
 
-cmd = Command()
-
-
 async def protocolHandler(stream):
-    # print("handler cra")
-    parser = hiredis.Reader()
     response = deque()
 
     while True:
         data = await stream.receive_some(65535)
         if not data:
-            return 
+            return
 
-        parser.feed(data)
-        req = parser.gets()
+        req = protocolParser(data)
 
-        # log.debug(f"DBG: {req}")
-        if req is False:
-            '''henüz veri yok ya da henüz parse edilmiş veri yok'''
-            break
-        
-        #print('veri', req)
         cmd_text = req[0].upper()
-        command = cmd.commands.get(cmd_text)
+        command = COMMANDS.get(cmd_text)
         if not command:
-            resp = f"-Unknown command {cmd_text}\r\n".encode()
+            resp = f"-Unknown command {cmd_text} possible commands are {COMMANDS.keys()}\r\n".encode()
         else:
             resp = command(*req[1:])
         response.append(resp)
-        #print ('response', response)
         await stream.send_all(b"".join(response))
         response.clear()
 
 
-        
-
-# dump database periodically 
+# dump database periodically
 async def dumper():
     while True:
         db.dump()
         await trio.sleep(10)  # secs
+
 
 async def main(hostname="localhost", port=6380):
     print("Listening on port {}".format(port))
@@ -62,11 +46,10 @@ async def main(hostname="localhost", port=6380):
     try:
 
         await trio.serve_tcp(protocolHandler, port, host=hostname)
-        print("gğıgğı")
     except KeyboardInterrupt:
         print("User requested shutdown.")
     finally:
-        #loop.run_until_complete(loop.create_task(dumper()))
+        # loop.run_until_complete(loop.create_task(dumper()))
         print("Redis is now ready to exit.")
     return 0
 
