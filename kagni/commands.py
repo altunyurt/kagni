@@ -166,6 +166,9 @@ def _del_(*keys):
         if key in DATA:
             del DATA[key]
             cnt += 1
+
+            if key in EXPIRES:
+                del EXPIRES[key]
     return cnt
 
 
