@@ -5,7 +5,7 @@ import logging
 from collections import deque
 from kagni.commands import COMMANDS
 from kagni.db import db
-from kagni.parser import protocolParser
+from kagni.resp import protocolParser
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
@@ -33,6 +33,8 @@ async def protocolHandler(stream):
             await stream.send_all(b"".join(response))
             response.clear()
     except trio.BrokenResourceError:
+        import traceback 
+        print(traceback.format_exc())
         pass
     finally:
         response.clear()

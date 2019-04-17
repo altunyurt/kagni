@@ -2,9 +2,9 @@
 
 import asyncio
 import uvloop
-import hiredis
 import logging
 from kagni.commands import COMMANDS
+from kagni.resp import protocolParser 
 import collections
 
 log = logging.getLogger()
@@ -16,30 +16,24 @@ log.addHandler(logging.StreamHandler())
 # her bağlantıda çağrılıyor bu
 class RedisServerProtocol(asyncio.Protocol):
     def __init__(self):
-        self.parser = hiredis.Reader()
         self.response = collections.deque()
 
     def connection_made(self, transport):
         self.transport = transport
 
     def data_received(self, data):
-        self.parser.feed(data)
 
-        while True:
-            resp = b''
-            req = self.parser.gets()
+        resp = b''
+        req = protocolParser(data)
 
-            # log.debug(f"DBG: {req}")
-            if req is False:
-                break
 
-            cmd_text = req[0].upper()
-            command = COMMANDS.get(cmd_text)
-            if not command:
-                resp = f"-Unknown command {cmd_text}\r\n".encode()
-            else:
-                resp = command(*req[1:])
-            self.response.append(resp)
+        cmd_text = req[0].upper()
+        command = COMMANDS.get(cmd_text)
+        if not command:
+            resp = f"-Unknown command {cmd_text}\r\n".encode()
+        else:
+            resp = command(*req[1:])
+        self.response.append(resp)
 
         self.transport.writelines(self.response)
         self.response.clear()

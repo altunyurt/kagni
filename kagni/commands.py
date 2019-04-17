@@ -9,6 +9,10 @@ import logging
 import inspect
 import re
 
+from .constants import *
+from .resp import protocolBuilder
+from .data import DATA 
+
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 log.addHandler(logging.StreamHandler())
@@ -17,78 +21,14 @@ log.addHandler(logging.StreamHandler())
 __all__ = ["COMMANDS"]
 
 CASTERS = {"bytes_to_int": lambda arg: int(arg), "bytes_to_str": lambda arg: arg.decode()}
-RE_NUMERIC = re.compile(b'^\d+$', re.ASCII)
+RE_NUMERIC = re.compile(b"^\d+$", re.ASCII)
 
 
-DATA = {}
 EXPIRES = {}
+# TODO: there's a COMMAND down below . fix naming
 COMMANDS = {}
 
 # https://github.com/chekart/rediserver
-SYM_CRLF = b"\r\n"
-OK = object()
-QUEUED = object()
-PONG = object()
-COMMAND = object()
-NIL = None
-
-
-class Error(Exception):
-    def __init__(self, class_, msg=""):
-        self.class_ = class_
-        self.message = msg
-
-
-class Errors:
-    INVALID_CURSOR = Error("ERR", "invalid cursor")
-    NOT_INT = Error("ERR", "value is not an integer or out of range")
-    WRONGTYPE = Error(
-        "WRONGTYPE", "Operation against a key holding the wrong kind of value"
-    )
-
-
-# https://github.com/chekart/rediserver
-def _resp_dumps(value):
-    if value is OK:
-        return [b"+OK"]
-
-    if value is NIL:
-        return [b"$-1"]
-
-    if value is QUEUED:
-        return [b"+QUEUED"]
-
-    if value is PONG:
-        return [b"+PONG"]
-
-    if value is COMMAND:
-        return [b"+COMMAND"]
-
-    if isinstance(value, int):
-        return [b":" + f'{value}'.encode()]
-
-    if isinstance(value, str):
-        value = value.encode()
-
-    if isinstance(value, bytes):
-        return [b"$" + f'{len(value)}'.encode(), value]
-
-    if isinstance(value, Error):
-        return [b"-" + f'{value.class_}'.encode() + b" " + f'{value.message}'.encode()]
-
-    if isinstance(value, (list, tuple)):
-        result = [b"*" + f'{len(value)}'.encode()]
-        for item in value:
-            result.extend(_resp_dumps(item))
-        return result
-
-    raise NotImplementedError()
-
-
-def dump_response(value):
-    response = _resp_dumps(value)
-    response = SYM_CRLF.join(response) + SYM_CRLF
-    return response
 
 
 # register command to commands repo
@@ -116,9 +56,8 @@ def register_command(name):
                 # push the rest of varargs in
                 args_list.extend(c_args[len(f_args) :])
 
-
             retval = f(*args_list)
-            return dump_response(retval)
+            return protocolBuilder(retval)
 
         COMMANDS[name] = inner
         return inner
@@ -174,24 +113,12 @@ def _del_(*keys):
 
 @register_command(b"EXPIRE")
 def _expire(key: bytes, secs: int):
-    if key not in DATA:
-        return 0
-
-    EXPIRES[key] = monotonic_ns_time() + secs * (10 ** 9)
-    return 1
+    return DATA.expire(key, secs)
 
 
 @register_command(b"TTL")
 def ttl(key: bytes):
-    if key not in DATA:
-        return -2
-
-    if key not in EXPIRES:
-        return -1
-
-    expires_at = EXPIRES.get(key)
-    ttl = ceil((expires_at - monotonic_ns_time()) / (10 ** 9))
-    return ttl if ttl >= 0 else -2
+    return DATA.ttl(key)
 
 
 @register_command(b"KEYS")
@@ -208,7 +135,7 @@ def _incrby(key: bytes, i: int):
             raise ERRORS.WRONGTYPE
 
     val = int(val) + i
-    DATA[key] = f'{ val }'.encode()
+    DATA[key] = f"{ val }".encode()
     return val
 
 
@@ -221,7 +148,7 @@ def _incr(key: bytes):
             raise ERRORS.WRONGTYPE
 
     val = int(val) + 1
-    DATA[key] = f'{ val }'.encode()
+    DATA[key] = f"{ val }".encode()
     return val
 
 
@@ -236,17 +163,24 @@ def _getrange(key: bytes, start: int, end: int):
 @register_command(b"SETBIT")
 def _setbit(key: bytes, bit: int, val: int):
 
+    log.debug(1)
     ex_val = 0
     bmap = DATA.get(key, BitMap())
+    log.debug(2, bmap)
 
     if key not in DATA:
+        log.debug(3)
         DATA[key] = bmap
     else:
+        log.debug(4)
         ex_val = 1 if bit in bmap else 0
 
+    log.debug(5)
     if val:
+        log.debug(7)
         bmap.add(bit)
     elif ex_val:
+        log.debug(8)
         bmap.remove(bit)
     return ex_val
 
@@ -302,3 +236,9 @@ def _bitpos(key: bytes, bit: bytes):
         else:
             retval = (bmap ^ BitMap(range(bmap.max() + 1))).min()
     return retval
+
+
+@register_command('FLUSHDB')
+def _flushdb():
+    pass
+
