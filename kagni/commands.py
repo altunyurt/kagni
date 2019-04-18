@@ -100,15 +100,7 @@ def _mset(*args):
 
 @register_command(b"DEL")
 def _del_(*keys):
-    cnt = 0
-    for key in keys:
-        if key in DATA:
-            del DATA[key]
-            cnt += 1
-
-            if key in EXPIRES:
-                del EXPIRES[key]
-    return cnt
+    return sum([DATA.remove(key) for key in keys])
 
 
 @register_command(b"EXPIRE")
@@ -163,24 +155,17 @@ def _getrange(key: bytes, start: int, end: int):
 @register_command(b"SETBIT")
 def _setbit(key: bytes, bit: int, val: int):
 
-    log.debug(1)
     ex_val = 0
     bmap = DATA.get(key, BitMap())
-    log.debug(2, bmap)
 
     if key not in DATA:
-        log.debug(3)
         DATA[key] = bmap
     else:
-        log.debug(4)
         ex_val = 1 if bit in bmap else 0
 
-    log.debug(5)
     if val:
-        log.debug(7)
         bmap.add(bit)
     elif ex_val:
-        log.debug(8)
         bmap.remove(bit)
     return ex_val
 
@@ -238,7 +223,11 @@ def _bitpos(key: bytes, bit: bytes):
     return retval
 
 
-@register_command('FLUSHDB')
+@register_command(b'FLUSHDB')
 def _flushdb():
+    pass
+
+@register_command(b'FLUSHALL')
+def _flushall():
     pass
 

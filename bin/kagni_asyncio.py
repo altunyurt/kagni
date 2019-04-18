@@ -26,9 +26,7 @@ class RedisServerProtocol(asyncio.Protocol):
         resp = b''
         req = protocolParser(data)
 
-
-        cmd_text = req[0].upper()
-        command = COMMANDS.get(cmd_text)
+        command = COMMANDS.get(req[0].upper())
         if not command:
             resp = f"-Unknown command {cmd_text}\r\n".encode()
         else:
