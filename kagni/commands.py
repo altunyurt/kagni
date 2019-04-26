@@ -1,52 +1,58 @@
+import logging
+import inspect
+import re
 from collections import deque
 from functools import partial
 from functools import reduce
 from functools import wraps
 from math import ceil
 from pyroaring import BitMap
-from time import monotonic_ns as monotonic_ns_time
-import logging
-import inspect
-import re
+from typing import List
+import fnmatch
 
-from .constants import *
+from .constants import Errors
+from .constants import OK
+from .constants import NIL
+from .constants import PONG
 from .resp import protocolBuilder
-from .data import DATA 
+
+# from .data import self.data
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 log.addHandler(logging.StreamHandler())
 
 
-__all__ = ["COMMANDS"]
+__all__ = ["Commands"]
 
-CASTERS = {"bytes_to_int": lambda arg: int(arg), "bytes_to_str": lambda arg: arg.decode()}
+CASTERS = {
+    "bytes_to_int": lambda arg: int(arg, base=10),
+    "bytes_to_str": lambda arg: arg.decode(),
+}
 RE_NUMERIC = re.compile(b"^\d+$", re.ASCII)
 
 
-EXPIRES = {}
-# TODO: there's a COMMAND down below . fix naming
-COMMANDS = {}
 
 # https://github.com/chekart/rediserver
 
 
 # register command to commands repo
-def register_command(name):
+def command_decorator(name):
     def wrapper(f):
 
         f_specs = inspect.getfullargspec(f)
-        f_args = f_specs.args
+        f_args = f_specs.args[1:]  # exclude self
         f_varargs = f_specs.varargs
         f_annotations = f_specs.annotations
 
         @wraps(f)
-        def inner(*c_args):  # calling args
+        def inner(instance, *c_args):  # calling args
             args_list = []
 
             if f_args:
-                for name, arg in zip(f_args, c_args):
-                    _type = f_annotations.get(name)
+
+                for arg_name, arg in zip(f_args, c_args):
+                    _type = f_annotations.get(arg_name)
                     if _type and _type != bytes:
                         arg = CASTERS[f"bytes_to_{_type.__name__}"](arg)
 
@@ -56,178 +62,164 @@ def register_command(name):
                 # push the rest of varargs in
                 args_list.extend(c_args[len(f_args) :])
 
-            retval = f(*args_list)
+            retval = f(instance, *args_list)
             return protocolBuilder(retval)
 
-        COMMANDS[name] = inner
         return inner
 
     return wrapper
 
 
-@register_command(b"PING")
-def _ping():
-    return PONG
+class Commands:
+    def __init__(self, data=None):
+        self.data = data if data is not None else {}
 
+    @command_decorator({"name": b"PING"})
+    def PING(self) -> PONG:
+        return PONG
 
-@register_command(b"COMMAND")
-def _command(*args):
-    return OK
+    @command_decorator(b"COMMAND")
+    def COMMAND(self, *args) -> OK:
+        return OK
 
+    @command_decorator(b"SET")
+    def SET(self, key: bytes, val: bytes) -> OK:
+        self.data[key] = val
+        return OK
 
-@register_command(b"SET")
-def _set(key: bytes, val: bytes):
-    DATA[key] = val
-    return OK
+    @command_decorator(b"GET")
+    def GET(self, key: bytes) -> (bytes, NIL):
+        return self.data.get(key, NIL)
 
+    @command_decorator(b"MGET")
+    def MGET(self, *keys) -> list:
+        return [self.data.get(key, NIL) for key in keys]
 
-@register_command(b"GET")
-def _get(key: bytes):
-    return DATA.get(key, NIL)
+    @command_decorator(b"MSET")
+    def MSET(self, *args: bytes) -> OK:
+        chunks = [args[i : i + 2] for i in range(0, len(args), 2)]
+        self.data.update(dict(chunks))
+        return OK
 
+    @command_decorator(b"DEL")
+    def DEL(self, *keys) -> int:
+        return sum([self.data.remove(key) for key in keys])
 
-@register_command(b"MGET")
-def _mget(*keys):
-    return [DATA.get(key, NIL) for key in keys]
+    @command_decorator(b"EXPIRE")
+    def EXPIRE(self, key: bytes, secs: int) -> int:
+        return self.data.expire(key, secs)
 
+    @command_decorator(b"TTL")
+    def TTL(self, key: bytes) -> int:
+        return self.data.ttl(key)
 
-@register_command(b"MSET")
-def _mset(*args):
-    chunks = [args[i : i + 2] for i in range(0, len(args), 2)]
-    DATA.update(dict(chunks))
-    return OK
+    @command_decorator(b"KEYS")
+    def KEYS(self, pattern: bytes = None) -> List[bytes]:
+        re_pattern = fnmatch.translate(pattern.decode() if pattern else "*")
+        rgx = re.compile(re_pattern.encode())
+        return [key for key in self.data if rgx.match(key)]
 
+    @command_decorator(b"INCRBY")
+    def INCRBY(self, key: bytes, i: int) -> int:
+        val = b"0"
+        if key in self.data:
+            val = self.data[key]
+            if not RE_NUMERIC.match(val):
+                raise Errors.WRONGTYPE
 
-@register_command(b"DEL")
-def _del_(*keys):
-    return sum([DATA.remove(key) for key in keys])
+        _val = int(val, 10) + i
+        self.data[key] = f"{ _val }".encode()
+        return _val
 
+    @command_decorator(b"INCR")
+    def INCR(self, key: bytes) -> int:
+        val = b"0"
+        if key in self.data:
+            val = self.data[key]
+            if not RE_NUMERIC.match(val):
+                raise Errors.WRONGTYPE
 
-@register_command(b"EXPIRE")
-def _expire(key: bytes, secs: int):
-    return DATA.expire(key, secs)
+        _val = int(val, 10) + 1
+        self.data[key] = f"{ _val }".encode()
+        return _val
 
+    @command_decorator(b"GETRANGE")
+    def GETRANGE(self, key: bytes, start: int, end: int) -> List[bytes]:
+        val = self.data.get(key, "")
+        return val[start:end]
 
-@register_command(b"TTL")
-def ttl(key: bytes):
-    return DATA.ttl(key)
+    ###############
+    ##BIT ops
+    @command_decorator(b"SETBIT")
+    def SETBIT(self, key: bytes, bit: int, val: int) -> int:
 
+        ex_val = 0
+        bmap = self.data.get(key, BitMap())
 
-@register_command(b"KEYS")
-def _keys(pattern):
-    return [k for k in DATA]
+        if key not in self.data:
+            self.data[key] = bmap
+        else:
+            ex_val = 1 if bit in bmap else 0
 
+        if val:
+            bmap.add(bit)
+        elif ex_val:
+            bmap.remove(bit)
+        return ex_val
 
-@register_command(b"INCRBY")
-def _incrby(key: bytes, i: int):
-    val = b"0"
-    if key in DATA:
-        val = DATA[key]
-        if not RE_NUMERIC.match(val):
-            raise ERRORS.WRONGTYPE
+    @command_decorator(b"GETBIT")
+    def GETBIT(self, key: bytes, bit: int) -> int:
+        if key not in self.data:
+            return 0
 
-    val = int(val) + i
-    DATA[key] = f"{ val }".encode()
-    return val
+        return 1 if bit in self.data[key] else 0
 
+    @command_decorator(b"BITOP")
+    def BITOP(self, op: bytes, dest_name: bytes, *keys) -> int:
+        op = op.lower()
+        maps = [self.data.get(key, BitMap()) for key in keys]
 
-@register_command(b"INCR")
-def _incr(key: bytes):
-    val = b"0"
-    if key in DATA:
-        val = DATA[key]
-        if not RE_NUMERIC.match(val):
-            raise ERRORS.WRONGTYPE
+        self.data[dest_name] = {
+            b"and": partial(reduce, lambda x, y: x & y, maps[1:], maps[0]),
+            b"or": partial(reduce, lambda x, y: x | y, maps[1:], maps[0]),
+            b"xor": partial(reduce, lambda x, y: x ^ y, maps[1:], maps[0]),
+            b"not": lambda: maps[0].flip(0, maps[0].max()),
+        }[op]()
 
-    val = int(val) + 1
-    DATA[key] = f"{ val }".encode()
-    return val
+        return len(self.data[dest_name])
 
+    @command_decorator(b"BITCOUNT")
+    def BITCOUNT(self, key: bytes) -> int:
+        if key not in self.data:
+            return 0
+        return len(self.data[key])
 
-@register_command(b"GETRANGE")
-def _getrange(key: bytes, start: int, end: int):
-    val = DATA.get(key, "")
-    return val[start:end]
+    @command_decorator(b"BITPOS")
+    def BITPOS(self, key: bytes, bit: bytes) -> int:
+        retval = -1
 
+        if key not in self.data:
+            return retval
 
-###############
-## BIT ops
-@register_command(b"SETBIT")
-def _setbit(key: bytes, bit: int, val: int):
+        bmap = self.data[key]
 
-    ex_val = 0
-    bmap = DATA.get(key, BitMap())
+        if not len(bmap):
+            if bit == b"1":
+                retval = -1
+            else:
+                retval = 0
 
-    if key not in DATA:
-        DATA[key] = bmap
-    else:
-        ex_val = 1 if bit in bmap else 0
-
-    if val:
-        bmap.add(bit)
-    elif ex_val:
-        bmap.remove(bit)
-    return ex_val
-
-
-@register_command(b"GETBIT")
-def _getbit(key: bytes, bit: int):
-    if key not in DATA:
-        return 0
-
-    return 1 if int(bit) in DATA[key] else 0
-
-
-@register_command(b"BITOP")
-def _bitop(op: bytes, dest_name: bytes, *keys):
-    op = op.lower()
-    maps = [DATA.get(key, BitMap()) for key in keys]
-
-    DATA[dest_name] = {
-        b"and": partial(reduce, lambda x, y: x & y, maps[1:], maps[0]),
-        b"or": partial(reduce, lambda x, y: x | y, maps[1:], maps[0]),
-        b"xor": partial(reduce, lambda x, y: x ^ y, maps[1:], maps[0]),
-        b"not": lambda: maps[0].flip(0, maps[0].max()),
-    }[op]()
-
-    return len(DATA[dest_name])
-
-
-@register_command(b"BITCOUNT")
-def _bitcount(key: bytes):
-    if key not in DATA:
-        return 0
-    return len(DATA[key])
-
-
-@register_command(b"BITPOS")
-def _bitpos(key: bytes, bit: bytes):
-    retval = -1
-
-    if key not in DATA:
+        else:
+            if bit == b"1":
+                retval = bmap.min()
+            else:
+                retval = (bmap ^ BitMap(range(bmap.max() + 1))).min()
         return retval
 
-    bmap = DATA[key]
+    @command_decorator(b"FLUSHDB")
+    def FLUSHDB(self):
+        pass
 
-    if not len(bmap):
-        if bit == b"1":
-            retval = -1
-        else:
-            retval = 0
-
-    else:
-        if bit == b"1":
-            retval = bmap.min()
-        else:
-            retval = (bmap ^ BitMap(range(bmap.max() + 1))).min()
-    return retval
-
-
-@register_command(b'FLUSHDB')
-def _flushdb():
-    pass
-
-@register_command(b'FLUSHALL')
-def _flushall():
-    pass
-
+    @command_decorator(b"FLUSHALL")
+    def FLUSHALL(self):
+        pass

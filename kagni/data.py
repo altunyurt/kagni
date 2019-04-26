@@ -1,4 +1,5 @@
 from collections.abc import MutableMapping
+from math import ceil
 from time import monotonic_ns as monotonic_ns_time
 
 __all__ = ["DATA"]
@@ -58,7 +59,7 @@ class Data(MutableMapping):
     def __len__(self):
         return len(self._storage)
 
-    def get(self, key, default):
+    def get(self, key, default=None):
         if key not in self._storage:
             return default
         return self.__getitem__(key)
@@ -90,5 +91,3 @@ class Data(MutableMapping):
     def remove(self, key):
         return self.__delitem__(key)
 
-
-DATA = Data()

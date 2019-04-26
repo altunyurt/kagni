@@ -1,23 +1,25 @@
-from .constants import *
+from .constants import OK
+from .constants import NIL
+from .constants import QUEUED
+from .constants import PONG
+from .constants import COMMAND
+from .constants import SYM_CRLF
+from .constants import Error
 
-__all__ = ['protocolBuilder', 'protocolParser']
+
+__all__ = ["protocolBuilder", "protocolParser"]
 
 
 responses_dict = {
     OK: [b"+OK"],
     NIL: [b"$-1"],
     QUEUED: [b"+QUEUED"],
-    PONG:[b"+PONG"],
-    COMMAND:[b"+COMMAND"]
+    PONG: [b"+PONG"],
+    COMMAND: [b"+COMMAND"],
 }
 
 # https://github.com/chekart/rediserver
-# @profile
 def _resp_dumps(value):
-
-
-    #if isinstance(value, str):
-    #    value = value.encode()
 
     if isinstance(value, bytes):
         return [f"${len(value)}".encode(), value]
@@ -29,7 +31,7 @@ def _resp_dumps(value):
         result = [f"*{len(value)}".encode()]
         for item in value:
             result.extend(_resp_dumps(item))
-        return result 
+        return result
 
     if value in responses_dict:
         return responses_dict[value]
@@ -71,11 +73,11 @@ def parse(payload):
 
     # TODO: type and length check according to protocol defs
     if _type == "*":
-        l = int(_data[1:])  #*3 -> 3
+        l = int(_data[1:], 10)  # *3 -> 3
         return [parse(payload) for i in range(l)]
 
     if _type == ":":
-        return float(_data[1:])
+        return int(_data[1:], 10)
 
     if _type == "$":
         return next(payload)

@@ -3,7 +3,9 @@
 import trio
 import logging
 from collections import deque
-from kagni.commands import COMMANDS
+from functools import partial
+from kagni.commands import Commands
+from kagni.data import Data
 from kagni.db import db
 from kagni.resp import protocolParser
 
@@ -12,7 +14,7 @@ log.setLevel(logging.DEBUG)
 log.addHandler(logging.StreamHandler())
 
 
-async def protocolHandler(stream):
+async def protocolHandler(stream, command_handler=None):
     response = deque()
 
     try:
@@ -24,7 +26,7 @@ async def protocolHandler(stream):
             req = protocolParser(data)
 
             cmd_text = req[0].upper()
-            command = COMMANDS.get(cmd_text)
+            command = getattr(command_handler, cmd_text.decode()) # command name in bytes 
             if not command:
                 resp = f"-Unknown command {cmd_text} possible commands are {COMMANDS.keys()}\r\n".encode()
             else:
@@ -33,9 +35,14 @@ async def protocolHandler(stream):
             await stream.send_all(b"".join(response))
             response.clear()
     except trio.BrokenResourceError:
-        import traceback 
+        import traceback
+
         print(traceback.format_exc())
-        pass
+    except: 
+        import traceback
+
+        print(traceback.format_exc())
+
     finally:
         response.clear()
         return
@@ -52,8 +59,11 @@ async def main(hostname="localhost", port=6380):
     print("Listening on port {}".format(port))
 
     try:
-
-        await trio.serve_tcp(protocolHandler, port, host=hostname)
+        # TODO data loads from sqlite3 db
+        c_handler = Commands(data=Data())
+        await trio.serve_tcp(
+            partial(protocolHandler, command_handler=c_handler), port, host=hostname
+        )
     except KeyboardInterrupt:
         print("User requested shutdown.")
     finally:
