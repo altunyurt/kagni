@@ -91,6 +91,12 @@ class Commands:
     def GET(self, key: bytes) -> (bytes, NIL):
         return self.data.get(key, NIL)
 
+    @command_decorator(b"GETSET")
+    def GETSET(self, key: bytes, val: bytes) -> (bytes, NIL):
+        retval = self.data.get(key, NIL)
+        self.data[key] = val
+        return retval
+
     @command_decorator(b"MGET")
     def MGET(self, *keys) -> list:
         return [self.data.get(key, NIL) for key in keys]
@@ -217,7 +223,7 @@ class Commands:
             if bit == b"1":
                 retval = bmap.min()
             else:
-                # xor the bitmap with an all 1s map of same length. 
+                # xor the bitmap with an all 1s map of same length.
                 # min value of the result map is where it's 0 for the original map
                 retval = (bmap ^ BitMap(range(bmap.max() + 1))).min()
         return retval
@@ -225,11 +231,67 @@ class Commands:
     @command_decorator(b"FLUSHDB")
     def FLUSHDB(self):
         self.data = Data()
-        #TODO: wipe the sqlite3 backend 
+        # TODO: wipe the sqlite3 backend
         return OK
 
     @command_decorator(b"FLUSHALL")
     def FLUSHALL(self):
         self.data = Data()
-        #TODO: wipe the sqlite3 backend 
+        # TODO: wipe the sqlite3 backend
         return OK
+
+    @command_decorator(b"HSET")
+    def HSET(self, key: bytes, field: bytes, val: bytes) -> int:
+        retval = 0  # field is new
+
+        if key not in self.data:
+            self.data[key] = {}
+            retval = 1
+        elif field not in self.data[key]:
+            retval = 1
+
+        self.data[key][field] = val
+        return retval
+
+    @command_decorator(b"HGET")
+    def HGET(self, key: bytes, field: bytes) -> (bytes, NIL):
+        data = self.data
+        if key not in data:
+            return NIL
+
+        if field not in data[key]:
+            return NIL
+
+        return data[key][field]
+
+    @command_decorator(b"HEXISTS")
+    def HEXISTS(self, key: bytes, field: bytes) -> int:
+        data = self.data
+        if key not in data:
+            return 0
+
+        if field not in data[key]:
+            return 0
+
+        return 1
+
+    @command_decorator(b"HDEL")
+    def HDEL(self, key: bytes, *fields: List[bytes]) -> int:
+        if key not in self.data:
+            return 0
+
+        data = self.data[key]
+        retval = 0
+        for field in fields:
+            if field not in data:
+                continue
+            del data[field]
+            retval += 1
+        return retval
+
+    @command_decorator(b"HGETALL")
+    def HGETALL(self, key: bytes) -> List[bytes]:
+        if key not in self.data:
+            return []
+        data = self.data[key]
+        return [b for a in data.items() for b in a]

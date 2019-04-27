@@ -47,6 +47,61 @@ def test_commands():
             "returns": OK,
         },
         {
+            "name": "Check GET return value",
+            "command": "GET",
+            "args": [b"d"],
+            "depends": [{"command": "SET", "args": [b"d", b"10"], "returns": OK}],
+            "returns": b"10",
+        },
+        {
+            "name": "Check GET nonexisting key return value",
+            "command": "GET",
+            "args": [b"d"],
+            "returns": NIL,
+        },
+        {
+            "name": "Check GET return value for unicode encoded string",
+            "command": "GET",
+            "args": [b"d"],
+            "returns": "fıstıkçışahap".encode("utf-8"),
+            "depends": [
+                {
+                    "command": "SET",
+                    "args": [b"d", "fıstıkçışahap".encode("utf-8")],
+                    "returns": OK,
+                }
+            ],
+        },
+        {
+            "name": "Check GETSET return value",
+            "command": "GETSET",
+            "args": [b"d", b"20"],
+            "depends": [{"command": "SET", "args": [b"d", b"10"], "returns": OK}],
+            "returns": b"10",
+            "expects": lambda cmds: cmds.data.get(b"d") == b"20",
+        },
+        {
+            "name": "Check GETSET nonexisting key return value",
+            "command": "GETSET",
+            "args": [b"d", b"10"],
+            "returns": NIL,
+            "expects": lambda cmds: cmds.data.get(b"d") == b"10",
+        },
+        {
+            "name": "Check GETSET return value for unicode encoded string",
+            "command": "GETSET",
+            "args": [b"d", b"foobarz"],
+            "returns": "fıstıkçışahap".encode("utf-8"),
+            "depends": [
+                {
+                    "command": "SET",
+                    "args": [b"d", "fıstıkçışahap".encode("utf-8")],
+                    "returns": OK,
+                }
+            ],
+            "expects": lambda cmds: cmds.data.get(b"d") == b"foobarz",
+        },
+        {
             "name": "Check MSET return value",
             "command": "MSET",
             "args": [
@@ -406,6 +461,124 @@ def test_commands():
             "returns": OK,
             "expects": lambda cmds: len(cmds.data) == 0,
         },
+        {
+            "name": "Check HSET return value for nonexisting key",
+            "command": "HSET",
+            "args": [b"k", b"f", b"123"],
+            "returns": 1,
+            "expects": lambda cmds: cmds.data[b"k"][b"f"] == b"123",
+        },
+        {
+            "name": "Check HSET return value for existing key",
+            "command": "HSET",
+            "args": [b"k", b"f", b"foobarz"],
+            "returns": 0,
+            "depends": [{"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1}],
+            "expects": lambda cmds: cmds.data[b"k"][b"f"] == b"foobarz",
+        },
+        {
+            "name": "Check HGET return value for nonexisting key",
+            "command": "HGET",
+            "args": [b"k", b"f"],
+            "returns": NIL,
+        },
+        {
+            "name": "Check HGET return value for nonexisting field",
+            "command": "HGET",
+            "args": [b"k", b"f"],
+            "returns": NIL,
+            "depends": [
+                {"command": "HSET", "args": [b"k", b"another_f", b"123"], "returns": 1}
+            ],
+        },
+        {
+            "name": "Check HGET return value for existing key",
+            "command": "HGET",
+            "args": [b"k", b"f"],
+            "returns": b"foobarz",
+            "depends": [
+                {"command": "HSET", "args": [b"k", b"f", b"foobarz"], "returns": 1}
+            ],
+        },
+        {
+            "name": "Check HEXISTS return value for nonexisting key",
+            "command": "HEXISTS",
+            "args": [b"k", b"f"],
+            "returns": 0
+        },
+        {
+            "name": "Check HEXISTS return value for nonexisting field",
+            "command": "HEXISTS",
+            "args": [b"k", b"f"],
+            "returns": 0,
+            "depends": [
+                {"command": "HSET", "args": [b"k", b"another_f", b"123"], "returns": 1}
+            ],
+        },
+        {
+            "name": "Check HEXISTS return value for existing field",
+            "command": "HEXISTS",
+            "args": [b"k", b"f"],
+            "returns": 1,
+            "depends": [
+                {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1}
+            ],
+        },
+        {
+            "name": "Check HDEL return value for non existing key",
+            "command": "HDEL",
+            "args": [b"k", b"f"],
+            "returns": 0,
+        },
+        {
+            "name": "Check HDEL return value for non existing fields",
+            "command": "HDEL",
+            "args": [b"k", b"f", b"z", b"a"],
+            "returns": 0,
+            "depends": [
+                {"command": "HSET", "args": [b"k", b"other_key", b"123"], "returns": 1}
+            ],
+        },
+        {
+            "name": "Check HDEL return value for some existing and some not keys",
+            "command": "HDEL",
+            "args": [b"k", b"f", b"z", b"a", b"c"],
+            "returns": 3,
+            "depends": [
+                {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1},
+                {"command": "HSET", "args": [b"k", b"a", b"123"], "returns": 1},
+                {"command": "HSET", "args": [b"k", b"other_key", b"123"], "returns": 1},
+                {"command": "HSET", "args": [b"k", b"c", b"123"], "returns": 1},
+            ],
+        },
+        {
+            "name": "Check HGETALL for nonexisting key",
+            "command": "HGETALL",
+            "args": [b"k"],
+            "returns": [],
+        },
+        {
+            "name": "Check HGETALL for existing key with no fields ",
+            "command": "HGETALL",
+            "args": [b"k"],
+            "returns": [],
+            "depends": [
+                {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1},
+                {"command": "HDEL", "args": [b"k", b"f"], "returns": 1},
+            ],
+        },
+        {
+            "name": "Check HGETALL return value for existing key and fields",
+            "command": "HGETALL",
+            "args": [b"k"],
+            "returns": [b'f', b'123', b'a', b'234', b'other_key', b'345', b'c', b'456'],
+            "depends": [
+                {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1},
+                {"command": "HSET", "args": [b"k", b"a", b"234"], "returns": 1},
+                {"command": "HSET", "args": [b"k", b"other_key", b"345"], "returns": 1},
+                {"command": "HSET", "args": [b"k", b"c", b"456"], "returns": 1},
+            ],
+        },
     ]
 
     for item in test_sequence:
@@ -419,4 +592,4 @@ def test_commands():
         assert returns == protocolBuilder(item["returns"]), item["name"]
 
         if "expects" in item:
-            assert item["expects"](cs), item["expects"]
+            assert item["expects"](cs), f"expects of {item['name']}"
