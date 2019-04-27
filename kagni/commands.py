@@ -15,6 +15,7 @@ from .constants import OK
 from .constants import NIL
 from .constants import PONG
 from .resp import protocolBuilder
+from .data import Data
 
 # from .data import self.data
 
@@ -30,7 +31,6 @@ CASTERS = {
     "bytes_to_str": lambda arg: arg.decode(),
 }
 RE_NUMERIC = re.compile(b"^\d+$", re.ASCII)
-
 
 
 # https://github.com/chekart/rediserver
@@ -145,8 +145,8 @@ class Commands:
 
     @command_decorator(b"GETRANGE")
     def GETRANGE(self, key: bytes, start: int, end: int) -> List[bytes]:
-        val = self.data.get(key, "")
-        return val[start:end]
+        val = self.data.get(key, b"")
+        return val[start : end + 1]
 
     ###############
     ##BIT ops
@@ -176,17 +176,20 @@ class Commands:
 
     @command_decorator(b"BITOP")
     def BITOP(self, op: bytes, dest_name: bytes, *keys) -> int:
-        op = op.lower()
+        op = op.upper()
         maps = [self.data.get(key, BitMap()) for key in keys]
 
         self.data[dest_name] = {
-            b"and": partial(reduce, lambda x, y: x & y, maps[1:], maps[0]),
-            b"or": partial(reduce, lambda x, y: x | y, maps[1:], maps[0]),
-            b"xor": partial(reduce, lambda x, y: x ^ y, maps[1:], maps[0]),
-            b"not": lambda: maps[0].flip(0, maps[0].max()),
+            b"AND": partial(reduce, lambda x, y: x & y, maps[1:], maps[0]),
+            b"OR": partial(reduce, lambda x, y: x | y, maps[1:], maps[0]),
+            b"XOR": partial(reduce, lambda x, y: x ^ y, maps[1:], maps[0]),
+            b"NOT": lambda: maps[0].flip(0, maps[0].max()),
         }[op]()
 
-        return len(self.data[dest_name])
+        # redis protocol compatibility. should return the longest string's length
+        # but roaring bitmaps only care about 1's. so we'll have to make it up
+        max_len = max([self.data.get(i).max() for i in [dest_name, *keys]])
+        return ceil(max_len / 8)
 
     @command_decorator(b"BITCOUNT")
     def BITCOUNT(self, key: bytes) -> int:
@@ -203,6 +206,7 @@ class Commands:
 
         bmap = self.data[key]
 
+        # no bits set yet, so only meaningful for checking 0 bit
         if not len(bmap):
             if bit == b"1":
                 retval = -1
@@ -213,13 +217,19 @@ class Commands:
             if bit == b"1":
                 retval = bmap.min()
             else:
+                # xor the bitmap with an all 1s map of same length. 
+                # min value of the result map is where it's 0 for the original map
                 retval = (bmap ^ BitMap(range(bmap.max() + 1))).min()
         return retval
 
     @command_decorator(b"FLUSHDB")
     def FLUSHDB(self):
-        pass
+        self.data = Data()
+        #TODO: wipe the sqlite3 backend 
+        return OK
 
     @command_decorator(b"FLUSHALL")
     def FLUSHALL(self):
-        pass
+        self.data = Data()
+        #TODO: wipe the sqlite3 backend 
+        return OK
