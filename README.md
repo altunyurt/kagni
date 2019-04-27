@@ -22,3 +22,30 @@ easing the backup process as well.
 
 Bitmaps in Redis start to hog memory in time as the data grows. Roaring Bitmaps is a better solution for the same requirements.
 The implementation is compatible with utilities / libraries such as [Bitmapist](https://github.com/Doist/bitmapist) 
+
+### Redis Compatibility
+
+Kagni speaks [RESP(REdis Serialization Protocol)](https://redis.io/topics/protocol) fluently. 
+I've implemented the following commands up to now: 
+
+- Ping
+- Command
+- Get
+- Set
+- Getset
+- Mget
+- Mset
+- Del
+- Expire
+- Ttl
+- Keys
+- Incr
+- Incrby
+- Getrange
+- Setbit
+- Getbit 
+- Bitop
+- Bitcount
+- Bitpos
+- Flushdb
+- Flushall
