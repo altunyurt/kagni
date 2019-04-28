@@ -504,7 +504,7 @@ def test_commands():
             "name": "Check HEXISTS return value for nonexisting key",
             "command": "HEXISTS",
             "args": [b"k", b"f"],
-            "returns": 0
+            "returns": 0,
         },
         {
             "name": "Check HEXISTS return value for nonexisting field",
@@ -520,9 +520,7 @@ def test_commands():
             "command": "HEXISTS",
             "args": [b"k", b"f"],
             "returns": 1,
-            "depends": [
-                {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1}
-            ],
+            "depends": [{"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1}],
         },
         {
             "name": "Check HDEL return value for non existing key",
@@ -571,12 +569,85 @@ def test_commands():
             "name": "Check HGETALL return value for existing key and fields",
             "command": "HGETALL",
             "args": [b"k"],
-            "returns": [b'f', b'123', b'a', b'234', b'other_key', b'345', b'c', b'456'],
+            "returns": [b"f", b"123", b"a", b"234", b"other_key", b"345", b"c", b"456"],
             "depends": [
                 {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1},
                 {"command": "HSET", "args": [b"k", b"a", b"234"], "returns": 1},
                 {"command": "HSET", "args": [b"k", b"other_key", b"345"], "returns": 1},
                 {"command": "HSET", "args": [b"k", b"c", b"456"], "returns": 1},
+            ],
+        },
+        {
+            "name": "Check SADD return value for nonexisting key",
+            "command": "SADD",
+            "args": [b"k", b"1", b"a", b"3", b"7"],
+            "returns": 4,
+        },
+        {
+            "name": "Check SADD return value for existing key",
+            "command": "SADD",
+            "args": [b"k", b"2", b"b", b"5", b"6"],
+            "returns": 4,
+            "depends": [
+                {"command": "SADD", "args": [b"k", b"1", b"a", b"3", b"7"], "returns": 4}
+            ],
+        },
+        {
+            "name": "Check SADD return value for existing key and conflicting values",
+            "command": "SADD",
+            "args": [b"k", b"1", b"b", b"3", b"6"],
+            "returns": 2,
+            "depends": [
+                {"command": "SADD", "args": [b"k", b"1", b"a", b"3", b"7"], "returns": 4}
+            ],
+        },
+        {
+            "name": "Check SCARD return value for nonexisting key",
+            "command": "SCARD",
+            "args": [b"k"],
+            "returns": 0,
+        },
+        {
+            "name": "Check SCARD return value for existing key",
+            "command": "SCARD",
+            "args": [b"k"],
+            "returns": 4,
+            "depends": [
+                {"command": "SADD", "args": [b"k", b"1", b"a", b"3", b"7"], "returns": 4}
+            ],
+        },
+        {
+            "name": "Check SMEMBERS return value for existing key",
+            "command": "SMEMBERS",
+            "args": [b"k"],
+            "returns": [],
+        },
+        {
+            "name": "Check SMEMBERS return value for existing key",
+            "command": "SMEMBERS",
+            "args": [b"k"],
+            "returns": list(set([b"1", b"a", b"3", b"7"])),
+            "depends": [
+                {"command": "SADD", "args": [b"k", b"1", b"a", b"3", b"7"], "returns": 4}
+            ],
+        },
+        {
+            "name": "Check SREM return value for existing key",
+            "command": "SREM",
+            "args": [b"k", b"a"],
+            "returns": 0,
+        },
+        {
+            "name": "Check SREM return value for existing key",
+            "command": "SREM",
+            "args": [b"k", b"1", b"2", b"hm",b"3", b"rn", b"78"],
+            "returns": 3,
+            "depends": [
+                {
+                    "command": "SADD",
+                    "args": [b"k", b"1", b"2", b"3", b"4", b"5", b"6", b"7", b"8", b"9"],
+                    "returns": 4,
+                }
             ],
         },
     ]
