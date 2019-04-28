@@ -49,3 +49,8 @@ I've implemented the following commands up to now:
 - Bitpos
 - Flushdb
 - Flushall
+- Hget
+- Hset
+- Hexists
+- Hdel
+- Hgetall
