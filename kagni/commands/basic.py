@@ -88,10 +88,45 @@ class CommandSetMixin:
         self.data[key] = f"{ _val }".encode()
         return _val
 
+    @command_decorator(b"DECRBY")
+    def DECRBY(self, key: bytes, i: int) -> int:
+        val = b"0"
+        if key in self.data:
+            val = self.data[key]
+            if not RE_NUMERIC.match(val):
+                raise Errors.WRONGTYPE
+
+        _val = int(val, 10) - i
+        self.data[key] = f"{ _val }".encode()
+        return _val
+
+    @command_decorator(b"DECR")
+    def DECR(self, key: bytes) -> int:
+        val = b"0"
+        if key in self.data:
+            val = self.data[key]
+            if not RE_NUMERIC.match(val):
+                raise Errors.WRONGTYPE
+
+        _val = int(val, 10) - 1
+        self.data[key] = f"{ _val }".encode()
+        return _val
+
     @command_decorator(b"GETRANGE")
-    def GETRANGE(self, key: bytes, start: int, end: int) -> List[bytes]:
+    def GETRANGE(self, key: bytes, start: int, end: int) -> bytes:
         val = self.data.get(key, b"")
         return val[start : end + 1]
+
+    @command_decorator(b"SETRANGE")
+    def SETRANGE(self, key: bytes, offset: int, value: bytes) -> bytes:
+        val = self.data.get(key, b"")
+
+        if offset > len(val):
+            val = val.ljust(offset, b"\x00") + value
+        else:
+            val = val[:offset] + value + val[offset + len(value) :]
+        self.data[key] = val
+        return len(val)
 
     @command_decorator(b"FLUSHDB")
     def FLUSHDB(self):
@@ -104,3 +139,13 @@ class CommandSetMixin:
         self.data = Data()
         # TODO: wipe the sqlite3 backend
         return OK
+
+    @command_decorator(b"APPEND")
+    def APPEND(self, key: bytes, val: bytes) -> int:
+        value = self.data.get(key, b"") + val
+        self.data[key] = value
+        return len(value)
+
+    @command_decorator(b"STRLEN")
+    def STRLEN(self, key: bytes) -> int:
+        return len(self.data.get(key, b""))

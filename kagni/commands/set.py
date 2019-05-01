@@ -132,9 +132,15 @@ class CommandSetMixin:
         pass
 
     @command_decorator(b"SUNION")
-    def SUNION(self, key: bytes, val: bytes):
-        pass
+    def SUNION(self, *keys: bytes) -> List[bytes]:
+        first = self.data.get(keys[0], set())
+        rest = (self.data.get(key, set()) for key in keys[1:])
+        retval = reduce(lambda _s1, _s2: _s1 | _s2, rest, first)
+        return list(retval)
 
     @command_decorator(b"SUNIONSTORE")
-    def SUNIONSTORE(self, key: bytes, val: bytes):
-        pass
+    def SUNIONSTORE(self, target: bytes, *keys: List[bytes]) -> List[bytes]:
+        first = self.data.get(keys[0], set())
+        rest = (self.data.get(key, set()) for key in keys[1:])
+        self.data[target] = reduce(lambda _s1, _s2: _s1 | _s2, rest, first)
+        return len(self.data[target])

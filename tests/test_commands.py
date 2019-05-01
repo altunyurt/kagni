@@ -138,6 +138,19 @@ def test_commands():
             "returns": 3,
         },
         {
+            "name": "Check APPEND with non existing key",
+            "command": "APPEND",
+            "args": [b"k", b"world"],
+            "returns": 5,
+        },
+        {
+            "name": "Check APPEND with  existing key",
+            "command": "APPEND",
+            "args": [b"k", b" world"],
+            "returns": 11,
+            "depends": [{"command": "SET", "args": [b"k", b"Hello"], "returns": "OK"}],
+        },
+        {
             "name": "Check DEL return value on non existing keys",
             "command": "DEL",
             "args": [b"e", b"f", b"g", b"nonexistent"],
@@ -274,6 +287,32 @@ def test_commands():
             "returns": 23,
         },
         {
+            "name": "Check DECR return value ",
+            "command": "DECR",
+            "args": [b"b"],
+            "depends": [{"command": "SET", "args": [b"b", b"1"], "returns": OK}],
+            "returns": 0,
+        },
+        {
+            "name": "Check DECR return value on nonexisting key",
+            "command": "DECR",
+            "args": [b"c"],
+            "returns": -1,
+        },
+        {
+            "name": "Check DECRBY return value ",
+            "command": "DECRBY",
+            "args": [b"b", b"18"],
+            "depends": [{"command": "SET", "args": [b"b", b"75"], "returns": OK}],
+            "returns": 57,
+        },
+        {
+            "name": "Check DECRBY return value on nonexisting key",
+            "command": "DECRBY",
+            "args": [b"c", b"23"],
+            "returns": -23,
+        },
+        {
             "name": "Check GETRANGE return value ",
             "command": "GETRANGE",
             "args": [b"b", b"4", b"10"],
@@ -287,6 +326,33 @@ def test_commands():
             "command": "GETRANGE",
             "args": [b"b", b"4", b"10"],
             "returns": b"",
+        },
+        {
+            "name": "Check SETRANGE with nonexisting key",
+            "command": "SETRANGE",
+            "args": [b"b", b"10", b"Hello"],
+            "returns": 15,
+            "expects": lambda cs: cs.data.get(b"b") == b"\x00" * 10 + b"Hello",
+        },
+        {
+            "name": "Check SETRANGE return value on existing key offset inside",
+            "command": "SETRANGE",
+            "args": [b"b", b"5", b"deneme"],
+            "returns": 11,
+            "depends": [
+                {"command": "SET", "args": [b"b", b"Hello World"], "returns": OK}
+            ],
+            "expects": lambda cs: cs.data.get(b"b") == b"Hellodeneme"
+        },
+        {
+            "name": "Check SETRANGE return value on existing key offset outside",
+            "command": "SETRANGE",
+            "args": [b"b", b"50", b"deneme"],
+            "returns": 56,
+            "depends": [
+                {"command": "SET", "args": [b"b", b"Hello World"], "returns": OK}
+            ],
+            "expects": lambda cs: cs.data.get(b"b") == b"Hello World" + b"\x00" * 39 + b"deneme"
         },
         ##
         # BITOPS
@@ -903,7 +969,9 @@ def test_commands():
             "name": "Check SPOP with a sample size less than set size",
             "command": "SPOP",
             "args": [b"k", b"3"],
-            "returns": lambda rv, cs: set([b"1", b"2", b"3", b"4", b"5"]).issuperset(set(rv)),
+            "returns": lambda rv, cs: set([b"1", b"2", b"3", b"4", b"5"]).issuperset(
+                set(rv)
+            ),
             "depends": [
                 {
                     "command": "SADD",
@@ -919,7 +987,6 @@ def test_commands():
             "returns": list(set([b"1", b"2"])),
             "depends": [{"command": "SADD", "args": [b"k", b"1", b"2"], "returns": 2}],
         },
-
         {
             "name": "Check SRANDMEMBER with nonexisting key",
             "command": "SRANDMEMBER",
@@ -937,7 +1004,7 @@ def test_commands():
             "name": "Check SRANDMEMBER with a sample size less than set size",
             "command": "SRANDMEMBER",
             "args": [b"k", b"3"],
-            "returns": lambda rv, cs: cs.data[b'k'].issuperset(set(rv)),
+            "returns": lambda rv, cs: cs.data[b"k"].issuperset(set(rv)),
             "depends": [
                 {
                     "command": "SADD",
@@ -953,7 +1020,6 @@ def test_commands():
             "returns": list(set([b"1", b"2"])),
             "depends": [{"command": "SADD", "args": [b"k", b"1", b"2"], "returns": 2}],
         },
-
     ]
 
     for item in test_sequence:
@@ -968,7 +1034,7 @@ def test_commands():
 
             returns = item["returns"]
             if callable(returns):
-                print (protocolParser(retval), cs.data, returns)
+                print(protocolParser(retval), cs.data, returns)
                 assert returns(protocolParser(retval), cs)  # should return truthy
             else:
                 assert retval == protocolBuilder(returns), item["name"]
