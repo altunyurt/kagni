@@ -3,7 +3,7 @@ from functools import reduce
 from typing import List
 import fnmatch
 import re
-from kagni.constants import Errors, OK, NIL, PONG
+from kagni.constants import Errors, Response
 from .decorator import command_decorator
 
 
@@ -95,7 +95,7 @@ class CommandSetMixin:
     @command_decorator(b"SPOP")
     def SPOP(self, key: bytes, count: int = None) -> (bytes, List[bytes]):
         if key not in self.data:
-            return NIL
+            return Response.NIL
 
         set_len = len(self.data[key])
         count = count if count else 1
@@ -113,7 +113,7 @@ class CommandSetMixin:
     @command_decorator(b"SRANDMEMBER")
     def SRANDMEMBER(self, key: bytes, count: int = None) -> (bytes, List[bytes]):
         if key not in self.data:
-            return NIL
+            return Response.NIL
 
         set_len = len(self.data[key])
         count = count if count else 1

@@ -1,10 +1,4 @@
-from collections import deque
-from functools import partial, reduce
-from math import ceil
 import logging
-
-from kagni.constants import Errors, OK, NIL, PONG
-from kagni.data import Data
 
 from .basic import CommandSetMixin as BasicMixin
 from .set import CommandSetMixin as SetMixin
@@ -19,9 +13,6 @@ log.addHandler(logging.StreamHandler())
 
 
 __all__ = ["Commands"]
-
-
-# https://github.com/chekart/rediserver
 
 
 # register command to commands repo

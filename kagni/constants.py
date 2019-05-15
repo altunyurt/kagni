@@ -1,10 +1,16 @@
+from enum import Enum
+from enum import auto
 
 SYM_CRLF = b"\r\n"
-OK = object()
-QUEUED = object()
-PONG = object()
-COMMAND = object()
-NIL = None
+
+
+class Response(Enum):
+    OK = auto()
+    QUEUED = auto()
+    PONG = auto()
+    COMMAND = auto()
+    NIL = auto()
+
 
 class Error(Exception):
     def __init__(self, class_, msg=""):
@@ -18,4 +24,3 @@ class Errors:
     WRONGTYPE = Error(
         "WRONGTYPE", "Operation against a key holding the wrong kind of value"
     )
-

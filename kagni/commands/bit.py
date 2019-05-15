@@ -1,14 +1,15 @@
 from typing import List
 from functools import partial, reduce
-from math import ceil 
+from math import ceil
 from pyroaring import BitMap
 import fnmatch
 import re
 
-from kagni.constants import Errors, OK, NIL, PONG
+from kagni.constants import Errors, Response
 from .decorator import command_decorator
 
 __all__ = ["CommandSetMixin"]
+
 
 class CommandSetMixin:
     @command_decorator(b"SETBIT")

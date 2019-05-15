@@ -5,7 +5,7 @@ from pyroaring import BitMap
 import fnmatch
 import re
 
-from kagni.constants import Errors, OK, NIL, PONG
+from kagni.constants import Errors, Response
 from .decorator import command_decorator
 
 __all__ = ["CommandSetMixin"]
@@ -26,13 +26,13 @@ class CommandSetMixin:
         return retval
 
     @command_decorator(b"HGET")
-    def HGET(self, key: bytes, field: bytes) -> (bytes, NIL):
+    def HGET(self, key: bytes, field: bytes) -> (bytes, Response.NIL):
         data = self.data
         if key not in data:
-            return NIL
+            return Response.NIL
 
         if field not in data[key]:
-            return NIL
+            return Response.NIL
 
         return data[key][field]
 

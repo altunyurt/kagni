@@ -1,10 +1,6 @@
 from kagni.commands import Commands
 from kagni.data import Data
-from kagni.constants import COMMAND
-from kagni.constants import NIL
-from kagni.constants import OK
-from kagni.constants import PONG
-from kagni.constants import QUEUED
+from kagni.constants import Response
 from kagni.resp import protocolBuilder
 from kagni.resp import protocolParser
 from random import choice
@@ -19,45 +15,45 @@ def test_commands():
             "name": "Check COMMAND return value",
             "command": "COMMAND",
             "args": [],
-            "returns": OK,
+            "returns": Response.OK,
         },
         {
             "name": "Check PING return value",
             "command": "PING",
             "args": [],
-            "returns": PONG,
+            "returns": Response.PONG,
         },
         {
             "name": "Check SET return value",
             "command": "SET",
             "args": [b"a", b"1"],
-            "returns": OK,
+            "returns": Response.OK,
         },
         {
             "name": "Check re-SET existing key return value",
             "command": "SET",
             "args": [b"b", b"2"],
-            "returns": OK,
-            "depends": [{"command": "SET", "args": [b"b", b"1"], "returns": OK}],
+            "returns": Response.OK,
+            "depends": [{"command": "SET", "args": [b"b", b"1"], "returns": Response.OK}],
         },
         {
             "name": "Check SET unicode byte string",
             "command": "SET",
             "args": [b"d", "fıstıkçışahap".encode("utf-8")],
-            "returns": OK,
+            "returns": Response.OK,
         },
         {
             "name": "Check GET return value",
             "command": "GET",
             "args": [b"d"],
-            "depends": [{"command": "SET", "args": [b"d", b"10"], "returns": OK}],
+            "depends": [{"command": "SET", "args": [b"d", b"10"], "returns": Response.OK}],
             "returns": b"10",
         },
         {
             "name": "Check GET nonexisting key return value",
             "command": "GET",
             "args": [b"d"],
-            "returns": NIL,
+            "returns": Response.NIL,
         },
         {
             "name": "Check GET return value for unicode encoded string",
@@ -68,7 +64,7 @@ def test_commands():
                 {
                     "command": "SET",
                     "args": [b"d", "fıstıkçışahap".encode("utf-8")],
-                    "returns": OK,
+                    "returns": Response.OK,
                 }
             ],
         },
@@ -76,7 +72,7 @@ def test_commands():
             "name": "Check GETSET return value",
             "command": "GETSET",
             "args": [b"d", b"20"],
-            "depends": [{"command": "SET", "args": [b"d", b"10"], "returns": OK}],
+            "depends": [{"command": "SET", "args": [b"d", b"10"], "returns": Response.OK}],
             "returns": b"10",
             "expects": lambda cmds: cmds.data.get(b"d") == b"20",
         },
@@ -84,7 +80,7 @@ def test_commands():
             "name": "Check GETSET nonexisting key return value",
             "command": "GETSET",
             "args": [b"d", b"10"],
-            "returns": NIL,
+            "returns": Response.NIL,
             "expects": lambda cmds: cmds.data.get(b"d") == b"10",
         },
         {
@@ -96,7 +92,7 @@ def test_commands():
                 {
                     "command": "SET",
                     "args": [b"d", "fıstıkçışahap".encode("utf-8")],
-                    "returns": OK,
+                    "returns": Response.OK,
                 }
             ],
             "expects": lambda cmds: cmds.data.get(b"d") == b"foobarz",
@@ -112,16 +108,16 @@ def test_commands():
                 b"g",
                 "fıstıkçışahap".encode("utf-8"),
             ],
-            "returns": OK,
+            "returns": Response.OK,
         },
         {
             "command": "MGET",
             "args": [b"a", b"b", b"c"],
             "depends": [
-                {"command": "SET", "args": [b"a", b"1"], "returns": OK},
-                {"command": "SET", "args": [b"b", b"2"], "returns": OK},
-                {"command": "SET", "args": [b"c", b"3"], "returns": OK},
-                {"command": "SET", "args": [b"d", b"4"], "returns": OK},
+                {"command": "SET", "args": [b"a", b"1"], "returns": Response.OK},
+                {"command": "SET", "args": [b"b", b"2"], "returns": Response.OK},
+                {"command": "SET", "args": [b"c", b"3"], "returns": Response.OK},
+                {"command": "SET", "args": [b"d", b"4"], "returns": Response.OK},
             ],
             "returns": [b"1", b"2", b"3"],
         },
@@ -130,10 +126,10 @@ def test_commands():
             "command": "DEL",
             "args": [b"e", b"f", b"g"],
             "depends": [
-                {"command": "SET", "args": [b"e", b"1"], "returns": OK},
-                {"command": "SET", "args": [b"f", b"2"], "returns": OK},
-                {"command": "SET", "args": [b"g", b"3"], "returns": OK},
-                {"command": "SET", "args": [b"d", b"4"], "returns": OK},
+                {"command": "SET", "args": [b"e", b"1"], "returns": Response.OK},
+                {"command": "SET", "args": [b"f", b"2"], "returns": Response.OK},
+                {"command": "SET", "args": [b"g", b"3"], "returns": Response.OK},
+                {"command": "SET", "args": [b"d", b"4"], "returns": Response.OK},
             ],
             "returns": 3,
         },
@@ -148,7 +144,7 @@ def test_commands():
             "command": "APPEND",
             "args": [b"k", b" world"],
             "returns": 11,
-            "depends": [{"command": "SET", "args": [b"k", b"Hello"], "returns": "OK"}],
+            "depends": [{"command": "SET", "args": [b"k", b"Hello"], "returns": "Response.OK"}],
         },
         {
             "name": "Check DEL return value on non existing keys",
@@ -164,7 +160,7 @@ def test_commands():
             "command": "EXPIRE",
             "args": [b"e", b"10"],
             "returns": 1,
-            "depends": [{"command": "SET", "args": [b"e", b"1"], "returns": OK}],
+            "depends": [{"command": "SET", "args": [b"e", b"1"], "returns": Response.OK}],
         },
         {
             "name": "Check expire retval on existing key",
@@ -181,8 +177,8 @@ def test_commands():
             "args": [b"e"],
             "returns": 10,
             "depends": [
-                {"command": "SET", "args": [b"e", b"1"], "returns": OK},
-                {"command": "EXPIRE", "args": [b"e", b"10"], "returns": OK},
+                {"command": "SET", "args": [b"e", b"1"], "returns": Response.OK},
+                {"command": "EXPIRE", "args": [b"e", b"10"], "returns": Response.OK},
             ],
         },
         {
@@ -190,7 +186,7 @@ def test_commands():
             "command": "TTL",
             "args": [b"e"],
             "returns": -1,
-            "depends": [{"command": "SET", "args": [b"e", b"1"], "returns": OK}],
+            "depends": [{"command": "SET", "args": [b"e", b"1"], "returns": Response.OK}],
         },
         {
             "name": "Check TTL on expired key",
@@ -198,8 +194,8 @@ def test_commands():
             "args": [b"e"],
             "returns": -2,
             "depends": [
-                {"command": "SET", "args": [b"e", b"1"], "returns": OK},
-                {"command": "EXPIRE", "args": [b"e", b"-10"], "returns": OK},
+                {"command": "SET", "args": [b"e", b"1"], "returns": Response.OK},
+                {"command": "EXPIRE", "args": [b"e", b"-10"], "returns": Response.OK},
             ],
         },
         {
@@ -216,7 +212,7 @@ def test_commands():
                 {
                     "command": "MSET",
                     "args": [b"a", b"1", b"b", b"1", b"c", b"1", b"d", b"1", b"e", b"1"],
-                    "returns": OK,
+                    "returns": Response.OK,
                 }
             ],
             "returns": [b"a", b"b", b"c", b"d", b"e"],
@@ -229,7 +225,7 @@ def test_commands():
                 {
                     "command": "MSET",
                     "args": [b"a", b"1", b"b", b"1", b"c", b"1", b"d", b"1", b"e", b"1"],
-                    "returns": OK,
+                    "returns": Response.OK,
                 }
             ],
             "returns": [b"a", b"b", b"c", b"d", b"e"],
@@ -242,7 +238,7 @@ def test_commands():
                 {
                     "command": "MSET",
                     "args": [b"a", b"1", b"b", b"1", b"c", b"1", b"d", b"1", b"e", b"1"],
-                    "returns": OK,
+                    "returns": Response.OK,
                 }
             ],
             "returns": [b"a", b"e"],
@@ -255,7 +251,7 @@ def test_commands():
                 {
                     "command": "MSET",
                     "args": [b"a", b"1", b"b", b"1", b"c", b"1", b"d", b"1", b"e", b"1"],
-                    "returns": OK,
+                    "returns": Response.OK,
                 }
             ],
             "returns": [],
@@ -264,7 +260,7 @@ def test_commands():
             "name": "Check INCR return value ",
             "command": "INCR",
             "args": [b"b"],
-            "depends": [{"command": "SET", "args": [b"b", b"1"], "returns": OK}],
+            "depends": [{"command": "SET", "args": [b"b", b"1"], "returns": Response.OK}],
             "returns": 2,
         },
         {
@@ -277,7 +273,7 @@ def test_commands():
             "name": "Check INCRBY return value ",
             "command": "INCRBY",
             "args": [b"b", b"18"],
-            "depends": [{"command": "SET", "args": [b"b", b"75"], "returns": OK}],
+            "depends": [{"command": "SET", "args": [b"b", b"75"], "returns": Response.OK}],
             "returns": 93,
         },
         {
@@ -290,7 +286,7 @@ def test_commands():
             "name": "Check DECR return value ",
             "command": "DECR",
             "args": [b"b"],
-            "depends": [{"command": "SET", "args": [b"b", b"1"], "returns": OK}],
+            "depends": [{"command": "SET", "args": [b"b", b"1"], "returns": Response.OK}],
             "returns": 0,
         },
         {
@@ -303,7 +299,7 @@ def test_commands():
             "name": "Check DECRBY return value ",
             "command": "DECRBY",
             "args": [b"b", b"18"],
-            "depends": [{"command": "SET", "args": [b"b", b"75"], "returns": OK}],
+            "depends": [{"command": "SET", "args": [b"b", b"75"], "returns": Response.OK}],
             "returns": 57,
         },
         {
@@ -318,7 +314,7 @@ def test_commands():
             "args": [b"b", b"4", b"10"],
             "returns": b"o world",
             "depends": [
-                {"command": "SET", "args": [b"b", b"hello world"], "returns": OK}
+                {"command": "SET", "args": [b"b", b"hello world"], "returns": Response.OK}
             ],
         },
         {
@@ -340,7 +336,7 @@ def test_commands():
             "args": [b"b", b"5", b"deneme"],
             "returns": 11,
             "depends": [
-                {"command": "SET", "args": [b"b", b"Hello World"], "returns": OK}
+                {"command": "SET", "args": [b"b", b"Hello World"], "returns": Response.OK}
             ],
             "expects": lambda cs: cs.data.get(b"b") == b"Hellodeneme"
         },
@@ -350,7 +346,7 @@ def test_commands():
             "args": [b"b", b"50", b"deneme"],
             "returns": 56,
             "depends": [
-                {"command": "SET", "args": [b"b", b"Hello World"], "returns": OK}
+                {"command": "SET", "args": [b"b", b"Hello World"], "returns": Response.OK}
             ],
             "expects": lambda cs: cs.data.get(b"b") == b"Hello World" + b"\x00" * 39 + b"deneme"
         },
@@ -511,7 +507,7 @@ def test_commands():
                 {"command": "SETBIT", "args": [b"b", b"2", b"1"], "returns": 0},
                 {"command": "SETBIT", "args": [b"b", b"4", b"1"], "returns": 0},
             ],
-            "returns": OK,
+            "returns": Response.OK,
             "expects": lambda cmds: len(cmds.data) == 0,
         },
         {
@@ -524,7 +520,7 @@ def test_commands():
                 {"command": "SETBIT", "args": [b"b", b"2", b"1"], "returns": 0},
                 {"command": "SETBIT", "args": [b"b", b"4", b"1"], "returns": 0},
             ],
-            "returns": OK,
+            "returns": Response.OK,
             "expects": lambda cmds: len(cmds.data) == 0,
         },
         {
@@ -546,13 +542,13 @@ def test_commands():
             "name": "Check HGET return value for nonexisting key",
             "command": "HGET",
             "args": [b"k", b"f"],
-            "returns": NIL,
+            "returns": Response.NIL,
         },
         {
             "name": "Check HGET return value for nonexisting field",
             "command": "HGET",
             "args": [b"k", b"f"],
-            "returns": NIL,
+            "returns": Response.NIL,
             "depends": [
                 {"command": "HSET", "args": [b"k", b"another_f", b"123"], "returns": 1}
             ],
@@ -956,7 +952,7 @@ def test_commands():
             "name": "Check SPOP with nonexisting key",
             "command": "SPOP",
             "args": [b"k"],
-            "returns": NIL,
+            "returns": Response.NIL,
         },
         {
             "name": "Check SPOP with only existing key",
@@ -991,7 +987,7 @@ def test_commands():
             "name": "Check SRANDMEMBER with nonexisting key",
             "command": "SRANDMEMBER",
             "args": [b"k"],
-            "returns": NIL,
+            "returns": Response.NIL,
         },
         {
             "name": "Check SRANDMEMBER with only existing key",

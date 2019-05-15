@@ -2,7 +2,7 @@ from typing import List
 import fnmatch
 import re
 
-from kagni.constants import Errors, OK, NIL, PONG
+from kagni.constants import Errors, Response
 from kagni.data import Data
 from .decorator import command_decorator
 
@@ -14,37 +14,37 @@ __all__ = ["CommandSetMixin"]
 
 class CommandSetMixin:
     @command_decorator({"name": b"PING"})
-    def PING(self) -> PONG:
-        return PONG
+    def PING(self) -> Response.PONG:
+        return Response.PONG
 
     @command_decorator(b"COMMAND")
-    def COMMAND(self, *args) -> OK:
-        return OK
+    def COMMAND(self, *args) -> Response.OK:
+        return Response.OK
 
     @command_decorator(b"SET")
-    def SET(self, key: bytes, val: bytes) -> OK:
+    def SET(self, key: bytes, val: bytes) -> Response.OK:
         self.data[key] = val
-        return OK
+        return Response.OK
 
     @command_decorator(b"GET")
-    def GET(self, key: bytes) -> (bytes, NIL):
-        return self.data.get(key, NIL)
+    def GET(self, key: bytes) -> (bytes, Response.NIL):
+        return self.data.get(key, Response.NIL)
 
     @command_decorator(b"GETSET")
-    def GETSET(self, key: bytes, val: bytes) -> (bytes, NIL):
-        retval = self.data.get(key, NIL)
+    def GETSET(self, key: bytes, val: bytes) -> (bytes, Response.NIL):
+        retval = self.data.get(key, Response.NIL)
         self.data[key] = val
         return retval
 
     @command_decorator(b"MGET")
     def MGET(self, *keys) -> list:
-        return [self.data.get(key, NIL) for key in keys]
+        return [self.data.get(key, Response.NIL) for key in keys]
 
     @command_decorator(b"MSET")
-    def MSET(self, *args: bytes) -> OK:
+    def MSET(self, *args: bytes) -> Response.OK:
         chunks = [args[i : i + 2] for i in range(0, len(args), 2)]
         self.data.update(dict(chunks))
-        return OK
+        return Response.OK
 
     @command_decorator(b"DEL")
     def DEL(self, *keys) -> int:
@@ -53,6 +53,10 @@ class CommandSetMixin:
     @command_decorator(b"EXPIRE")
     def EXPIRE(self, key: bytes, secs: int) -> int:
         return self.data.expire(key, secs)
+
+    @command_decorator(b"PERSIST")
+    def PERSIST(self, key: bytes, secs: int) -> int:
+        return self.data.persist(key)
 
     @command_decorator(b"TTL")
     def TTL(self, key: bytes) -> int:
@@ -132,13 +136,13 @@ class CommandSetMixin:
     def FLUSHDB(self):
         self.data = Data()
         # TODO: wipe the sqlite3 backend
-        return OK
+        return Response.OK
 
     @command_decorator(b"FLUSHALL")
     def FLUSHALL(self):
         self.data = Data()
         # TODO: wipe the sqlite3 backend
-        return OK
+        return Response.OK
 
     @command_decorator(b"APPEND")
     def APPEND(self, key: bytes, val: bytes) -> int:

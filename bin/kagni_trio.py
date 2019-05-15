@@ -6,7 +6,7 @@ from collections import deque
 from functools import partial
 from kagni.commands import Commands
 from kagni.data import Data
-from kagni.db import db
+from kagni.db import DB
 from kagni.resp import protocolParser
 
 log = logging.getLogger()
@@ -26,9 +26,9 @@ async def protocolHandler(stream, command_handler=None):
             req = protocolParser(data)
 
             cmd_text = req[0].upper()
-            command = getattr(command_handler, cmd_text.decode()) # command name in bytes 
+            command = getattr(command_handler, cmd_text.decode())  # command name in bytes
             if not command:
-                resp = f"-Unknown command {cmd_text} possible commands are {COMMANDS.keys()}\r\n".encode()
+                resp = f"-Unknown command {cmd_text} \r\n".encode()
             else:
                 resp = command(*req[1:])
             response.append(resp)
@@ -38,7 +38,7 @@ async def protocolHandler(stream, command_handler=None):
         import traceback
 
         print(traceback.format_exc())
-    except: 
+    except:
         import traceback
 
         print(traceback.format_exc())
@@ -47,23 +47,35 @@ async def protocolHandler(stream, command_handler=None):
         response.clear()
         return
 
+from time import sleep 
 
 # dump database periodically
-async def dumper():
+async def dumper(db, data):
     while True:
-        db.dump()
-        await trio.sleep(10)  # secs
+        db.dump(data)
+        # await trio.sleep(2000)  # secs
+        sleep(20)
+        # async trio sqlite gerekiyor 
+
+        print("yea")
 
 
 async def main(hostname="localhost", port=6380):
     print("Listening on port {}".format(port))
 
     try:
-        # TODO data loads from sqlite3 db
-        c_handler = Commands(data=Data())
-        await trio.serve_tcp(
-            partial(protocolHandler, command_handler=c_handler), port, host=hostname
+        data = Data()
+        db = DB('./deneme.sqlite')
+        c_handler = Commands(data)
+        server = partial(
+            trio.serve_tcp,
+            partial(protocolHandler, command_handler=c_handler),
+            port=port,
+            host=hostname,
         )
+        async with trio.open_nursery() as nursery:
+            # nursery.start_soon(dumper, db, data)
+            nursery.start_soon(server)
     except KeyboardInterrupt:
         print("User requested shutdown.")
     finally:
@@ -73,5 +85,4 @@ async def main(hostname="localhost", port=6380):
 
 if __name__ == "__main__":
     trio.run(main)
-
 # vim: set filetype=python

@@ -24,9 +24,9 @@ class Data(MutableMapping):
         self._storage = {}
 
     def __getitem__(self, key):
-        val = self._storage.get(key)
-        if not val:
+        if key not in self._storage:
             return None
+        val = self._storage[key]
 
         value = val["value"]
         expires_at = val["expires_at"]
@@ -88,6 +88,12 @@ class Data(MutableMapping):
         ttl = ceil((expires_at - monotonic_ns_time()) / (10 ** 9))
         return ttl if ttl >= 0 else -2
 
+    def persist(self, key: bytes):
+        if key not in self:
+            return 0
+
+        self.storage[key].update({"expires_at": None})
+        return 1
+
     def remove(self, key):
         return self.__delitem__(key)
-

@@ -28,4 +28,4 @@ class DB:
         cur.close()
 
 
-db = DB(":memory:")
+

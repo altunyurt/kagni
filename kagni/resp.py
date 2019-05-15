@@ -1,21 +1,17 @@
-from .constants import OK
-from .constants import NIL
-from .constants import QUEUED
-from .constants import PONG
-from .constants import COMMAND
 from .constants import SYM_CRLF
 from .constants import Error
+from .constants import Response
 
 
 __all__ = ["protocolBuilder", "protocolParser"]
 
 
 responses_dict = {
-    OK: [b"+OK"],
-    NIL: [b"$-1"],
-    QUEUED: [b"+QUEUED"],
-    PONG: [b"+PONG"],
-    COMMAND: [b"+COMMAND"],
+   Response.OK: [b"+OK"],
+   Response.NIL: [b"$-1"],
+   Response.QUEUED: [b"+QUEUED"],
+   Response.PONG: [b"+PONG"],
+   Response.COMMAND: [b"+COMMAND"],
 }
 
 # https://github.com/chekart/rediserver
