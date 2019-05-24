@@ -8,6 +8,7 @@ from kagni.data import Data
 from kagni.resp import protocolParser
 import collections
 from functools import partial
+from kagni.db import DB
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
@@ -40,13 +41,30 @@ class RedisServerProtocol(asyncio.Protocol):
         self.response.clear()
 
 
-def main(hostname="localhost", port=6380):
+# dump database periodically
+async def dumper(db, data, period=3):
+    await db.create_table()
+    while True:
+        print("yea")
+        await db.dump(data)
+        print("yead 2")
+        await asyncio.sleep(period)  # secs
+    print("coktok")
+
+
+if __name__ == "__main__":
     uvloop.install()
     loop = asyncio.get_event_loop()
-    command_handler = Commands(data=Data())
+    data = Data()
+    command_handler = Commands(data)
     protocolHandler = partial(lambda *n: RedisServerProtocol(command_handler))
-    coro = loop.create_server(protocolHandler, hostname, port)
-    server = loop.run_until_complete(coro)
+
+    coro = loop.create_server(protocolHandler, "localhost", 6380)
+    server =  loop.run_until_complete(coro)
+
+    dumper_task = loop.create_task(dumper(DB('deneme.db'), data))
+    dumper_ = loop.run_until_complete(dumper_task)
+
     print("Listening on port {}".format(port))
     try:
         loop.run_forever()
@@ -57,10 +75,4 @@ def main(hostname="localhost", port=6380):
         loop.run_until_complete(server.wait_closed())
         loop.close()
         print("Redis is now ready to exit.")
-    return 0
-
-
-if __name__ == "__main__":
-    main()
-
 # vim: set syntax=python

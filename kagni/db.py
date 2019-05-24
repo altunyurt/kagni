@@ -1,31 +1,35 @@
-import apsw
+import aiosqlite
 import pickle
 
 
 class DB:
     def __init__(self, path):
-        self.con = apsw.Connection(path)
-        cur = self.con.cursor()
+        self.path = path
 
-        cur.execute("""create table if not exists data (key text not null, value blob not null);""")
+    async def create_table(self):
+        async with aiosqlite.connect(self.path) as _db:
+            await _db.execute(
+                """create table if not exists data 
+                              (key text not null, value blob not null);"""
+            )
+            await _db.commit()
+        return
 
-        cur.close()
+    async def dump(self, data):
+        """ needs to be run as a task """
+        async with aiosqlite.connect(self.path) as _db:
+            for key, val in data.items():
+                await _db.execute("""insert into data values(?,?)""", 
+                            [key, pickle.dumps(val)])
 
-    def dump(self, data):
-        ''' needs to be run as a task '''
-        cur = self.con.cursor()
-        for key, val in data.items():
-            cur.execute("""insert into data values(?,?)""", [key, pickle.dumps(val)])
+            await _db.commit()
 
-        cur.close()
+    async def load(self):
+        async with aiosqlite.connect(self.path) as _db:
+            _db.row_factory = aiosqlite.Row
 
-    def load(self):
-        cur = self.con.cursor()
-        cur.execute("""select key, value from data""")
-        for (key, val) in cur.fetchall():
-            print(key, pickle.loads(val))
-
-        cur.close()
-
-
-
+            async with db.execute('key, value from data') as cursor:
+                print(row)
+                # for (key, val) in cur.fetchall():
+                #     print(key, pickle.loads(val))
+        return 
