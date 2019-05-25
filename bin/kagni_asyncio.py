@@ -43,7 +43,6 @@ class RedisServerProtocol(asyncio.Protocol):
 
 # dump database periodically
 async def dumper(db, data, period=3):
-    await db.create_table()
     while True:
         print("yea")
         await db.dump(data)
