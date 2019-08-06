@@ -8,6 +8,7 @@ from kagni.commands import Commands
 from kagni.data import Data
 from kagni.db import DB
 from kagni.resp import protocolParser
+import traceback
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
@@ -18,10 +19,7 @@ async def protocolHandler(stream, command_handler=None):
     response = deque()
 
     try:
-        while True:
-            data = await stream.receive_some(65535)
-            if not data:
-                return
+        async for data in stream:
 
             req = protocolParser(data)
 
@@ -34,30 +32,23 @@ async def protocolHandler(stream, command_handler=None):
             response.append(resp)
             await stream.send_all(b"".join(response))
             response.clear()
-    except trio.BrokenResourceError:
-        import traceback
-
-        print(traceback.format_exc())
     except:
-        import traceback
 
         print(traceback.format_exc())
 
     finally:
-        response.clear()
-        return
+        return response.clear()
 
 from time import sleep 
 
 # dump database periodically
 async def dumper(db, data):
     while True:
-        db.dump(data)
-        # await trio.sleep(2000)  # secs
-        sleep(20)
-        # async trio sqlite gerekiyor 
-
-        print("yea")
+        #db.dump(data)
+        print("before sleep")
+        await trio.to_thread.run_sync(sleep, 2)
+        print("after sleep")
+        # await trio.sleep(2)
 
 
 async def main(hostname="localhost", port=6380):
@@ -74,7 +65,7 @@ async def main(hostname="localhost", port=6380):
             host=hostname,
         )
         async with trio.open_nursery() as nursery:
-            # nursery.start_soon(dumper, db, data)
+            nursery.start_soon(dumper, db, data)
             nursery.start_soon(server)
     except KeyboardInterrupt:
         print("User requested shutdown.")
@@ -85,4 +76,3 @@ async def main(hostname="localhost", port=6380):
 
 if __name__ == "__main__":
     trio.run(main)
-# vim: set filetype=python

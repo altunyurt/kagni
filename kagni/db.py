@@ -1,7 +1,11 @@
-import aiosqlite
 import pickle
 import pathlib
 from functools import wraps
+
+try:
+    import apsw as sqlite
+except ImportError:
+    import sqlite3 as sqlite
 
 
 class DB:
@@ -13,62 +17,51 @@ class DB:
 
     def connector(f):
         @wraps(f)
-        async def wrapper(inst, *args, **kwargs):
-            async with aiosqlite.connect(inst.file_name) as _db:
-                _db.row_factory = aiosqlite.Row
-                kwargs.update({"_db": _db})
-                print("kwa", kwargs, *args)
-                return await f(inst, *args, **kwargs)
+        def wrapper(inst, *args, **kwargs):
+            with sqlite.connect(inst.file_name) as conn:
+                conn.row_factory = sqlite.Row
+                kwargs.update({"conn": conn})
+                with conn:
+                    return f(inst, *args, **kwargs)
 
         return wrapper
 
     @connector
-    async def create_table(self, _db=None):
-        await _db.execute(
+    def create_table(self, conn=None):
+        return conn.execute(
             f"create table if not exists {self.table_name} (key text not null, value blob not null);"
         )
-        return await _db.commit()
-
-    # async def backup(self):
-    #     if self.backup_path:
-    #         path = pathlib.Path(self.backup_path)
-    #         if not path.exists():
-    #             path.mkdir()
-
-    #         path.joinpath('')
 
     @connector
-    async def backup_table(self, _db=None):
+    def backup_table(self, conn=None):
 
         try:
-            await _db.execute(
+            return conn.execute(
                 f"alter table {self.table_name} rename to {self.table_name}_bak"
             )
-        except aiosqlite.OperationalError:
+        except sqlite.OperationalError:
             pass
 
     @connector
-    async def insert_rows(self, data, _db=None):
+    def insert_rows(self, data, conn=None):
         for key, val in data.items():
-            await _db.execute(
+            conn.execute(
                 f"insert into {self.table_name} values(?, ?)", [key, pickle.dumps(val)]
             )
 
-        return await _db.commit()
+        return
 
-    async def dump(self, data):
+    def dump(self, data):
         """ needs to be run as a task """
 
-        await self.backup_table()
-        await self.create_table()
-        await self.insert_rows(data)
-
-    async def load(self):
-        async with aiosqlite.connect(self.file_name) as _db:
-            _db.row_factory = aiosqlite.Row
-
-            async with db.execute("key, value from data") as cursor:
-                print(row)
-                # for (key, val) in cur.fetchall():
-                #     print(key, pickle.loads(val))
+        self.backup_table()
+        self.create_table()
+        self.insert_rows(data)
         return
+
+    @connector
+    def load(self, conn=None):
+
+        with conn.execute("select key, value from data") as cursor:
+            for (key, val) in cur.fetchall():
+                print(key, pickle.loads(val))
