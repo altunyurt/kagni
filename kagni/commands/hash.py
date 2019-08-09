@@ -6,13 +6,11 @@ import fnmatch
 import re
 
 from kagni.constants import Errors, Response
-from .decorator import command_decorator
 
 __all__ = ["CommandSetMixin"]
 
 class CommandSetMixin:
 
-    @command_decorator(b"HSET")
     def HSET(self, key: bytes, field: bytes, val: bytes) -> int:
         retval = 0  # field is new
 
@@ -25,7 +23,6 @@ class CommandSetMixin:
         self.data[key][field] = val
         return retval
 
-    @command_decorator(b"HGET")
     def HGET(self, key: bytes, field: bytes) -> (bytes, Response.NIL):
         data = self.data
         if key not in data:
@@ -36,7 +33,6 @@ class CommandSetMixin:
 
         return data[key][field]
 
-    @command_decorator(b"HEXISTS")
     def HEXISTS(self, key: bytes, field: bytes) -> int:
         data = self.data
         if key not in data:
@@ -47,7 +43,6 @@ class CommandSetMixin:
 
         return 1
 
-    @command_decorator(b"HDEL")
     def HDEL(self, key: bytes, *fields: List[bytes]) -> int:
         if key not in self.data:
             return 0
@@ -61,7 +56,6 @@ class CommandSetMixin:
             retval += 1
         return retval
 
-    @command_decorator(b"HGETALL")
     def HGETALL(self, key: bytes) -> List[bytes]:
         if key not in self.data:
             return []

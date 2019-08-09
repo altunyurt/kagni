@@ -24,17 +24,18 @@ class Data(MutableMapping):
         self._storage = {}
 
     def __getitem__(self, key):
-        if key not in self._storage:
+        _strg = self._storage
+        if key not in _strg:
             return None
-        val = self._storage[key]
 
-        value = val["value"]
+        val = _strg[key]
         expires_at = val["expires_at"]
+
         if not expires_at or expires_at > monotonic_ns_time():
-            return value
+            return val["value"]
 
         # item expired
-        del self._storage[key]
+        del _strg[key]
         return None
 
     def __setitem__(self, key, val, expire_secs: int = None):

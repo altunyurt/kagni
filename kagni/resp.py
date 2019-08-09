@@ -5,6 +5,7 @@ reader = hiredis.Reader()
 from .constants import SYM_CRLF
 from .constants import Error
 from .constants import Response
+from functools import lru_cache
 
 
 __all__ = ["protocolBuilder", "protocolParser"]
@@ -42,12 +43,14 @@ def _resp_dumps(value):
     raise NotImplementedError()
 
 
+@lru_cache(32, True)
 def protocolBuilder(value):
     response = _resp_dumps(value)
     response = SYM_CRLF.join(response) + SYM_CRLF
     return response
 
 
+@lru_cache(32, True)
 def protocolParser(_data):
     reader.feed(_data)
     return reader.gets()

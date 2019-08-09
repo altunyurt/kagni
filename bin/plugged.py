@@ -18,13 +18,14 @@ log.addHandler(logging.StreamHandler())
 b_upper = bytes.upper
 
 data = Data()
-db = DB('./deneme.sqlite')
+db = DB("./deneme.sqlite")
 c_handler = Commands(data)
 
+
 def commandHandler(cmd, *args):
-    command = getattr(c_handler,b_upper(cmd).decode())
+    command = getattr(c_handler, b_upper(cmd).decode())
     return command(*args)
-   
+
 
 async def requestHandler(stream):
 
@@ -33,7 +34,8 @@ async def requestHandler(stream):
             # pipe da olabilir. Her zaman için list dönmeli
             request = protocolParser(data)
             response = commandHandler(*request)
-            await stream.send_all(response)
+            b_response = protocolBuilder(response)
+            await stream.send_all(b_response)
     except:
         print(traceback.format_exc())
 
