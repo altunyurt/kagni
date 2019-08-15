@@ -7,10 +7,6 @@ from .hash import CommandSetMixin as HashMixin
 
 # from .data import self.data
 
-log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
-log.addHandler(logging.StreamHandler())
-
 
 __all__ = ["Commands"]
 
