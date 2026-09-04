@@ -1,112 +1,35 @@
 # kagni
-Kagni is a Redis-like data store. 
 
-Kagni - Kağnı in Turkish is a form of tumbrel, pulled by bullocks used for carrying stuff in rural areas. It is slow as hell, but gets things done. Naming is due to its ability to store and load on / off stuff and also its sturdiness. 
+Kagni is a Redis-like data store daemon. It speaks RESP over TCP or unix sockets, keeps everything in memory and snapshots it to sqlite. Named after the Turkish ox-cart (kağnı) — slow, but it gets things done.
 
-Performance will get better hopefully :) 
+## Running
 
-### Running
+Requires Python 3.13+.
 
-The daemon is a runnable package (no separate scripts):
+    uv sync                    # install deps and the `kagni` console script
+    uv run kagni --help        # or: uv run python -m kagni
+    pip install .              # plain-pip alternative; then: kagni --help
 
-    uv sync                       # one-time setup
-    uv run kagni --help           # console script, or:
-    uv run python -m kagni ...    # same, no install needed
+    kagni --loop asyncio|trio [--host HOST] [--port PORT] [--socket PATH]
+          [--db PATH] [--dump-interval SECS] [--no-save] [--no-uvloop]
 
-    uv run kagni --loop asyncio|trio [--host HOST] [--port PORT]
-                 [--socket PATH] [--db PATH] [--dump-interval SECS]
-                 [--no-save] [--no-uvloop]
+Defaults: `asyncio` loop (uvloop when installed), `localhost:6380`, sqlite file `kagni.sqlite`, snapshot every 20 s.
 
-TCP (default `localhost:6380`) and a unix domain socket (`--socket`) are
-additive, like redis: `--port 0` disables TCP for socket-only setups.
-`--db :memory:` runs purely in memory: no sqlite file, no snapshots.
-`--no-save` keeps loading an existing `--db` file at boot (redis `save ""`)
-but never writes snapshots back, so the seed file stays pristine.
+- TCP and a unix domain socket are additive: `--socket PATH` also listens there, `--port 0` disables TCP.
+- `--db :memory:` runs purely in memory — no file, no restore, no snapshots.
+- `--no-save` loads an existing snapshot at boot but never writes back (redis `save ""`); a missing file is not created.
 
-### Details
+## Storage
 
-#### Asyncio / Trio
+- Everything lives in memory with lazy key expiry (`EXPIRE`/`TTL`); the sqlite snapshot is a full-table transaction, replaced every `--dump-interval` seconds and restored at boot.
+- Strings are byte strings with redis semantics (counters are strings too). Lists are deques, giving O(1) push/pop at both ends. Bitmaps are roaring bitmaps, so sparse high-offset data stays compact where a redis-style byte string would grow linearly.
 
-Kagni has two async implementations for now, based on Asyncio + Uvloop and Trio. For now Asyncio + Uvloop implementation gives the best performance, but personally I like the Trio implementation better, for not getting in the way much.
+## Commands
 
-#### Sqlite db backend 
+Supported commands, grouped by data type:
 
-All data lives in memory and an internal async job will be periodically dumping the memory into SQLite database.
-Already a battle tested and proven data storage technology, SQLite will be more than enough to handle the storage 
-easing the backup process as well. 
+| String | List | Set | Hash | Bitmap | Keys / admin |
+| --- | --- | --- | --- | --- | --- |
+| SET<br>GET<br>GETSET<br>MSET<br>MGET<br>APPEND<br>STRLEN<br>GETRANGE<br>SETRANGE<br>INCR<br>INCRBY<br>DECR<br>DECRBY | LPUSH<br>RPUSH<br>LPUSHX<br>RPUSHX<br>LLEN<br>LINDEX<br>LSET<br>LRANGE<br>LTRIM<br>LREM<br>LINSERT<br>LPOP<br>RPOP<br>LMOVE<br>RPOPLPUSH<br>LPOS<br>LMPOP | SADD<br>SCARD<br>SMEMBERS<br>SISMEMBER<br>SREM<br>SPOP<br>SRANDMEMBER<br>SMOVE<br>SDIFF<br>SDIFFSTORE<br>SINTER<br>SINTERSTORE<br>SUNION<br>SUNIONSTORE | HSET<br>HGET<br>HEXISTS<br>HDEL<br>HGETALL | SETBIT<br>GETBIT<br>BITCOUNT<br>BITPOS<br>BITOP | PING<br>COMMAND<br>CONFIG<br>TYPE<br>DEL<br>EXPIRE<br>PERSIST<br>TTL<br>KEYS<br>FLUSHDB<br>FLUSHALL |
 
-
-#### Roaring bitmaps
-
-Bitmaps in Redis start to hog memory in time as the data grows. Roaring Bitmaps is a better solution for the same requirements.
-The implementation is compatible with utilities / libraries such as [Bitmapist](https://github.com/Doist/bitmapist) 
-
-### Redis Compatibility
-
-Kagni speaks [RESP(REdis Serialization Protocol)](https://redis.io/topics/protocol) fluently. 
-I've implemented the following commands up to now: 
-
-- Ping
-- Command
-- Get
-- Set
-- Getset
-- Mget
-- Mset
-- Del
-- Expire
-- Persist
-- Ttl
-- Keys
-- Incr
-- Incrby
-- Decr
-- Decrby
-- Getrange
-- Setrange
-- Strlen
-- Append
-- Setbit
-- Getbit 
-- Bitop
-- Bitcount
-- Bitpos
-- Flushdb
-- Flushall
-- Hget
-- Hset
-- Hexists
-- Hdel
-- Hgetall
-- Sadd
-- Scard
-- Sdiff
-- Sdiffstore
-- Sinter
-- Sinterstore
-- Sismember
-- Smembers
-- Smove
-- Spop
-- Srandmember
-- Srem
-- Sunion
-- Sunionstore
-- Lpush
-- Lpushx
-- Rpush
-- Rpushx
-- Llen
-- Lindex
-- Lset
-- Lrange
-- Ltrim
-- Lrem
-- Linsert
-- Lpop
-- Rpop
-- Lmove
-- Rpoplpush
-- Lpos
-- Lmpop
-- Type
+Not implemented (yet): blocking commands (`BLPOP`/`BRPOP`/`BLMOVE`), sorted sets, streams, pub/sub, transactions, `SCAN`, and command variants like `SET NX/EX` or `GETEX`.
