@@ -2,6 +2,11 @@ from .constants import SYM_CRLF
 from .constants import Error
 from .constants import Response
 
+try:
+    import hiredis  # optional C accelerator; falls back to the pure parser
+except ImportError:
+    hiredis = None
+
 __all__ = ["protocolBuilder", "protocolParser", "RESPReader", "ProtocolError"]
 
 
@@ -142,23 +147,70 @@ def _parse_bulk(buf, pos):
 
 
 class RESPReader:
-    """Incremental RESP parser.
+    """Incremental RESP parser — one instance per connection.
 
-    One instance per connection.  ``feed()`` accepts whatever the socket
-    delivers (arbitrary fragment sizes, several pipelined commands per
-    chunk) and returns every complete command/value that could be parsed
-    out of it; partial frames are kept in the internal buffer until the
-    rest arrives.  Raises ``ProtocolError`` on malformed input.
+    ``feed()`` accepts whatever the socket delivers (arbitrary fragment
+    sizes, several pipelined commands per chunk) and returns every complete
+    command/value that could be parsed out of it; partial frames are kept
+    internally until the rest arrives.  Raises ``ProtocolError`` on
+    malformed input.
+
+    Engines:
+    - ``"hiredis"`` (default when hiredis is installed): C-speed parsing.
+      hiredis deliberately does not accept redis *inline* commands
+      (``PING\r\n``) — real clients always use the multi-bulk form — while
+      the pure engine keeps full inline support.
+    - ``"python"``: pure-python parser, always available.  It also applies
+      a buffer cap (mirroring redis' proto-max-bulk-len) against a peer
+      that announces a giant payload and never delivers it.
+
+    Unlike the plugged branch experiment this replaces, the hiredis reader
+    is per-connection state here, is never memoised, and every complete
+    message in a chunk is drained (pipelining).
     """
 
-    # mirrors redis proto-max-bulk-len: guards the buffer against a peer
-    # that announces a giant payload and never delivers it
+    # mirrors redis proto-max-bulk-len: guards the pure parser's buffer
+    # against a peer that announces a giant payload and never delivers it
     MAX_BUFFER = 512 * 1024 * 1024
 
-    def __init__(self):
+    def __init__(self, engine=None):
+        if engine is None:
+            engine = "hiredis" if hiredis is not None else "python"
+        if engine not in ("hiredis", "python"):
+            raise ValueError("unknown engine %r" % engine)
+        if engine == "hiredis" and hiredis is None:
+            raise ValueError("hiredis engine requested but hiredis is not installed")
+        self._engine = engine
         self._buffer = bytearray()
+        self._reader = hiredis.Reader() if engine == "hiredis" else None
+
+    @property
+    def engine(self):
+        return self._engine
 
     def feed(self, data):
+        if self._engine == "hiredis":
+            return self._feed_hiredis(data)
+        return self._feed_python(data)
+
+    def _feed_hiredis(self, data):
+        try:
+            self._reader.feed(data)
+        except hiredis.HiredisError as exc:
+            raise ProtocolError(str(exc))
+
+        messages = []
+        while True:
+            try:
+                message = self._reader.gets()
+            except hiredis.HiredisError as exc:
+                raise ProtocolError(str(exc))
+            if message is False:  # hiredis: no complete message buffered
+                return messages
+            # None is a legitimate parsed value (null bulk / null array)
+            messages.append(message)
+
+    def _feed_python(self, data):
         self._buffer.extend(data)
         if len(self._buffer) > self.MAX_BUFFER:
             raise ProtocolError("request exceeds maximum allowed size")

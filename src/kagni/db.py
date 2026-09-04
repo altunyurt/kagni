@@ -1,12 +1,30 @@
-import apsw
 import logging
 import pickle
 
 log = logging.getLogger(__name__)
 
+try:
+    import apsw
+except ImportError:  # stdlib fallback keeps the backend usable without apsw
+    apsw = None
+
+import sqlite3 as _sqlite3
+
 _SCHEMA = """
 create table if not exists data (key blob not null, value blob not null);
 """
+
+
+def _open(path):
+    """Open a backend connection (apsw when available, else stdlib sqlite3).
+    Created and used within a single operation so sqlite3's per-thread
+    requirement is satisfied when dumps run in a worker thread."""
+    if apsw is not None:
+        con = apsw.Connection(path)
+    else:
+        con = _sqlite3.connect(path)
+    con.execute("pragma busy_timeout=5000")
+    return con
 
 
 class DB:
@@ -24,9 +42,7 @@ class DB:
         self._prepare()
 
     def _connect(self):
-        con = apsw.Connection(self.path)
-        con.execute("pragma busy_timeout=5000")
-        return con
+        return _open(self.path)
 
     def _prepare(self):
         con = self._connect()
@@ -72,6 +88,7 @@ class DB:
         """Drop the persisted snapshot (used by FLUSHDB/FLUSHALL)."""
         con = self._connect()
         try:
-            con.execute("delete from data")
+            with con:  # sqlite3 needs an explicit commit for the delete
+                con.execute("delete from data")
         finally:
             con.close()

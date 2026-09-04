@@ -15,11 +15,16 @@ from kagni.constants import Error, Response
 from kagni.data import Data
 from kagni.resp import RESPReader, ProtocolError, protocolBuilder, protocolParser
 
-try:
-    import pyroaring  # noqa: F401
-    HAS_PYROARING = True
-except ImportError:
-    HAS_PYROARING = False
+
+def _readers():
+    """One RESPReader per parse engine (pure python, plus hiredis when
+    the optional C accelerator is installed)."""
+    readers = [RESPReader(engine="python")]
+    try:
+        readers.append(RESPReader(engine="hiredis"))
+    except ValueError:
+        pass
+    return readers
 
 
 def _commands():
@@ -215,7 +220,9 @@ def test_sscan_stub_removed():
 
 # --------------------------------------------------------------- bit commands
 def test_bitop_with_missing_sources_and_bad_ops():
-    if not HAS_PYROARING:
+    try:
+        import pyroaring  # noqa: F401
+    except ImportError:
         return
     c = _commands()
     c.SETBIT(b"a", b"10", b"1")
@@ -234,7 +241,9 @@ def test_bitop_with_missing_sources_and_bad_ops():
 
 
 def test_bitpos_zero_finds_first_gap():
-    if not HAS_PYROARING:
+    try:
+        import pyroaring  # noqa: F401
+    except ImportError:
         return
     c = _commands()
     c.SETBIT(b"k", b"0", b"1")
@@ -246,25 +255,62 @@ def test_bitpos_zero_finds_first_gap():
 
 # --------------------------------------------------------------------- resp
 def test_resp_reader_pipelining_and_fragmentation():
-    reader = RESPReader()
-    assert reader.feed(b"*1\r\n$4\r\nPIN") == []  # partial frame buffered
-    assert reader.feed(b"G\r\n*1\r\n$4\r\nPING\r\n") == [[b"PING"], [b"PING"]]
-    assert reader.feed(b"") == []
+    for make in _readers():
+        reader = make
+        assert reader.engine in ("python", "hiredis")
+        assert reader.feed(b"*1\r\n$4\r\nPIN") == []  # partial frame buffered
+        assert reader.feed(b"G\r\n*1\r\n$4\r\nPING\r\n") == [
+            [b"PING"],
+            [b"PING"],
+        ], reader.engine
+        assert reader.feed(b"") == [], reader.engine
 
 
 def test_resp_reader_crlf_inside_bulk_value():
     wire = b"*3\r\n$3\r\nSET\r\n$1\r\na\r\n$4\r\nx\r\ny\r\n"
-    assert RESPReader().feed(wire) == [[b"SET", b"a", b"x\r\ny"]]
+    for reader in _readers():
+        assert reader.feed(wire) == [[b"SET", b"a", b"x\r\ny"]], reader.engine
 
 
 def test_resp_reader_malformed_payload():
-    reader = RESPReader()
-    # declares 3 bytes but the payload is not CRLF-terminated after them
-    try:
-        reader.feed(b"*1\r\n$3\r\nxxxxx")
-    except ProtocolError:
-        return
-    raise AssertionError("expected ProtocolError for unterminated bulk")
+    for reader in _readers():
+        # invalid multibulk length: rejected by both engines
+        try:
+            reader.feed(b"*x\r\n")
+        except ProtocolError:
+            continue
+        raise AssertionError("engine %s: expected ProtocolError" % reader.engine)
+
+
+def test_resp_reader_bulk_terminator_strictness():
+    """The pure engine requires the declared bulk length to be followed by
+    CRLF; hiredis is lenient there (documented engine difference)."""
+    wire = b"*1\r\n$3\r\nxxxxx"
+    for reader in _readers():
+        if reader.engine == "python":
+            try:
+                reader.feed(wire)
+            except ProtocolError:
+                continue
+            raise AssertionError("python engine: expected ProtocolError")
+        else:
+            # hiredis parses the 3 declared bytes and leaves the tail
+            # buffered for the next message
+            assert reader.feed(wire) == [[b"xxx"]]
+
+
+def test_resp_reader_parse_variants():
+    wire = (
+        b":42\r\n"
+        + b"$3\r\nfoo\r\n"
+        + b"$-1\r\n"
+        + b"*-1\r\n"
+        + b"*0\r\n"
+        + b"*2\r\n$1\r\na\r\n:7\r\n"
+    )
+    expected = [42, b"foo", None, None, [], [b"a", 7]]
+    for reader in _readers():
+        assert reader.feed(wire) == expected, reader.engine
 
 
 def test_protocol_parser_one_shot():
@@ -309,29 +355,45 @@ def test_dispatch_unknown_command_and_arity():
 
 # ---------------------------------------------------------------------- db
 def test_db_snapshot_replace_semantics():
-    try:
-        import apsw  # noqa: F401
-    except ImportError:
-        return
+    """The snapshot backend must behave identically on apsw and on the
+    stdlib sqlite3 fallback."""
     import os
     import tempfile
 
+    import kagni.db as dbmod
     from kagni.db import DB
 
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "kagni.sqlite")
-        db = DB(path)
-        d = Data()
-        d[b"a"] = b"1"
-        d[b"b"] = b"2"
-        db.dump(d)
+    real_apsw = dbmod.apsw
+    backends = []
+    if real_apsw is not None:
+        backends.append("apsw")
+    try:
+        import sqlite3  # noqa: F401
+        backends.append("sqlite3")
+    except ImportError:
+        pass
+    assert backends, "no sqlite backend available"
 
-        # deleting a key in memory must remove it from the store too
-        del d[b"a"]
-        db.dump(d)
-        snapshot = db.load()
-        assert set(snapshot) == {b"b"}
-        assert snapshot[b"b"] == b"2"
+    for backend in backends:
+        if backend == "sqlite3":
+            dbmod.apsw = None  # force the stdlib fallback
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "kagni.sqlite")
+                db = DB(path)
+                d = Data()
+                d[b"a"] = b"1"
+                d[b"b"] = b"2"
+                db.dump(d)
 
-        db.flush()
-        assert db.load() == {}
+                # deleting a key in memory must remove it from the store too
+                del d[b"a"]
+                db.dump(d)
+                snapshot = db.load()
+                assert set(snapshot) == {b"b"}, backend
+                assert snapshot[b"b"] == b"2", backend
+
+                db.flush()
+                assert db.load() == {}, backend
+        finally:
+            dbmod.apsw = real_apsw
