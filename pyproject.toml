@@ -1,7 +1,7 @@
 [project]
 name = "kagni"
 version = "0.6.0"
-description = "Add your description here"
+description = "Python-native, Redis-protocol data store daemon with sqlite snapshots"
 readme = "README.md"
 authors = [
     { name = "Özgür Altunyurt", email = "altunyurt@gmail.com" }

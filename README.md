@@ -1,6 +1,27 @@
 # kagni
 
-Kagni is a Redis-like data store daemon. It speaks RESP over TCP or unix sockets, keeps everything in memory and snapshots it to sqlite. Named after the Turkish ox-cart (kağnı) — slow, but it gets things done.
+Kagni is a Python-native, Redis-protocol data store daemon: everything in memory, snapshots to sqlite, one `pip install` away. Named after the Turkish ox-cart (kağnı) — not built for raw speed, but it gets things done.
+
+## Why kagni
+
+It is a real RESP server that lives comfortably inside Python workflows:
+
+- **Testing / CI** — a genuine Redis-compatible endpoint over TCP or a unix
+  socket for integration tests: real wire protocol, real pipelining, real
+  persistence modes, no containers and no native builds. For component
+  tests the command layer is importable directly, no sockets needed.
+  (Alternatives like fakeredis run in-process only and speak no sockets.)
+- **Embedded / sidecar** — the same venv that runs your Python service can
+  run kagni next to it: `--db :memory:` for a pure-RAM cache, a sqlite
+  snapshot file for durability, or `--no-save` to serve a seed dataset
+  without ever writing back.
+- **Native Python** — `pip install .` then `kagni` or `python -m kagni`;
+  pick the event loop (asyncio+uvloop or trio); sqlite snapshots are
+  inspectable with standard tooling.
+
+It is not a Redis replacement where throughput or feature breadth matter:
+expect a modest single-process op rate, a ~65-command subset, and no
+blocking commands, replication, transactions or pub/sub.
 
 ## Running
 
