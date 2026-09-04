@@ -7,12 +7,18 @@ Performance will get better hopefully :)
 
 ### Running
 
-    ./kagni.py --loop asyncio|trio [--host HOST] [--port PORT]
-               [--socket PATH] [--db PATH] [--dump-interval SECS]
+The daemon is a runnable package (no separate scripts):
+
+    uv sync                       # one-time setup
+    uv run kagni --help           # console script, or:
+    uv run python -m kagni ...    # same, no install needed
+
+    uv run kagni --loop asyncio|trio [--host HOST] [--port PORT]
+                 [--socket PATH] [--db PATH] [--dump-interval SECS]
+                 [--no-save] [--no-uvloop]
 
 TCP (default `localhost:6380`) and a unix domain socket (`--socket`) are
 additive, like redis: `--port 0` disables TCP for socket-only setups.
-`uv run kagni` is equivalent to `./kagni.py`.
 `--db :memory:` runs purely in memory: no sqlite file, no snapshots.
 `--no-save` keeps loading an existing `--db` file at boot (redis `save ""`)
 but never writes snapshots back, so the seed file stays pristine.

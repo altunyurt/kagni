@@ -15,6 +15,7 @@ import logging
 import os
 import socket
 
+from kagni import __version__
 from kagni.commands import Commands
 from kagni.data import Data
 from kagni.db import DB
@@ -133,6 +134,11 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog="kagni",
         description="Kagni — a Redis-like data store (RESP, sqlite snapshots).",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="%(prog)s " + __version__,
     )
     parser.add_argument(
         "--loop",
