@@ -430,6 +430,84 @@ def test_config_get():
 
 
 # ---------------------------------------------------------------------- db
+def test_list_wrongtype_raises():
+    c = _commands()
+    c.SET(b"s", b"abc")
+    c.SADD(b"set", b"m")
+    c.HSET(b"h", b"f", b"v")
+    for key in (b"s", b"set", b"h"):
+        _expect_error(lambda: c.LPUSH(key, b"x"), "WRONGTYPE")
+        _expect_error(lambda: c.RPUSH(key, b"x"), "WRONGTYPE")
+        _expect_error(lambda: c.LLEN(key), "WRONGTYPE")
+        _expect_error(lambda: c.LRANGE(key, b"0", b"-1"), "WRONGTYPE")
+        _expect_error(lambda: c.LINDEX(key, b"0"), "WRONGTYPE")
+        _expect_error(lambda: c.LPOP(key), "WRONGTYPE")
+        _expect_error(lambda: c.RPOP(key), "WRONGTYPE")
+        _expect_error(lambda: c.LSET(key, b"0", b"x"), "WRONGTYPE")
+        _expect_error(lambda: c.LTRIM(key, b"0", b"-1"), "WRONGTYPE")
+        _expect_error(lambda: c.LREM(key, b"0", b"x"), "WRONGTYPE")
+        _expect_error(lambda: c.LINSERT(key, b"BEFORE", b"p", b"x"), "WRONGTYPE")
+    # ... and the reverse: list commands must not be usable on a list via
+    # the wrong family either (spot-check)
+    c2 = _commands()
+    c2.RPUSH(b"lst", b"a")
+    _expect_error(lambda: c2.GET(b"lst"), "WRONGTYPE")
+    _expect_error(lambda: c2.SADD(b"lst", b"x"), "WRONGTYPE")
+
+
+def test_lset_errors():
+    c = _commands()
+    _expect_error(lambda: c.LSET(b"missing", b"0", b"x"), "ERR")  # no such key
+    c.RPUSH(b"k", b"a", b"b")
+    err = _expect_error(lambda: c.LSET(b"k", b"5", b"x"))  # index out of range
+    assert err.message == "index out of range", err.message
+    _expect_error(lambda: c.LSET(b"k", b"-5", b"x"))
+
+
+def test_linsert_where_validation_precedes_key_lookup():
+    # redis validates BEFORE|AFTER before looking the key up
+    c = _commands()
+    err = _expect_error(lambda: c.LINSERT(b"missing", b"SIDEWAYS", b"p", b"x"))
+    assert err.message == "syntax error", err.message
+
+
+def test_pop_count_validation():
+    c = _commands()
+    for pop in (c.LPOP, c.RPOP):
+        err = _expect_error(lambda: pop(b"missing", b"-1"))
+        assert err.message == "value is out of range, must be positive", err.message
+    # negative count on an existing list errors the same way
+    c.RPUSH(b"k", b"a")
+    _expect_error(lambda: c.LPOP(b"k", b"-3"))
+
+
+def test_list_expiry_interplay():
+    c = _commands()
+    c.RPUSH(b"k", b"a", b"b")
+    c.EXPIRE(b"k", b"-1")
+    # logically gone: reads see nothing, pushes start a fresh list
+    assert c.LLEN(b"k") == protocolBuilder(0)
+    assert c.LRANGE(b"k", b"0", b"-1") == protocolBuilder([])
+    assert c.LPOP(b"k") == protocolBuilder(Response.NIL)
+    assert c.RPUSH(b"k", b"x") == protocolBuilder(1)
+    assert c.LLEN(b"k") == protocolBuilder(1)
+
+
+def test_nil_array_wire_shape():
+    assert protocolBuilder(Response.NIL_ARRAY) == b"*-1\r\n"
+    assert protocolParser(b"*-1\r\n") is None
+    # empty array stays distinct from the null array
+    assert protocolBuilder([]) == b"*0\r\n"
+
+
+def test_dispatch_list_arity():
+    c = _commands()
+    assert b"wrong number of arguments" in c.dispatch([b"LPUSH", b"k"])
+    assert b"wrong number of arguments" in c.dispatch([b"RPUSH", b"k"])
+    assert b"wrong number of arguments" in c.dispatch([b"LPOP", b"k", b"1", b"2"])
+    assert b"wrong number of arguments" in c.dispatch([b"LRANGE", b"k", b"0"])
+
+
 def test_db_snapshot_replace_semantics():
     """The snapshot backend must behave identically on apsw and on the
     stdlib sqlite3 fallback."""
@@ -460,14 +538,18 @@ def test_db_snapshot_replace_semantics():
                 d = Data()
                 d[b"a"] = b"1"
                 d[b"b"] = b"2"
+                from collections import deque
+
+                d[b"lst"] = deque([b"x", b"y"])
                 db.dump(d)
 
                 # deleting a key in memory must remove it from the store too
                 del d[b"a"]
                 db.dump(d)
                 snapshot = db.load()
-                assert set(snapshot) == {b"b"}, backend
+                assert set(snapshot) == {b"b", b"lst"}, backend
                 assert snapshot[b"b"] == b"2", backend
+                assert snapshot[b"lst"] == deque([b"x", b"y"]), backend
 
                 db.flush()
                 assert db.load() == {}, backend

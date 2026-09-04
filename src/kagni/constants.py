@@ -10,6 +10,7 @@ class Response(Enum):
     PONG = auto()
     COMMAND = auto()
     NIL = auto()
+    NIL_ARRAY = auto()  # RESP null array (*-1), distinct from an empty array
 
 
 class Error(Exception):
@@ -27,6 +28,8 @@ class Errors:
         "WRONGTYPE", "Operation against a key holding the wrong kind of value"
     )
     SYNTAX = Error("ERR", "syntax error")
+    NOKEY = Error("ERR", "no such key")
+    INDEX_RANGE = Error("ERR", "index out of range")
     BIT_OFFSET = Error("ERR", "bit offset is not an integer or out of range")
     BIT_VALUE = Error("ERR", "bit is not an integer or out of range")
     BIT_ARG = Error("ERR", "The bit argument must be 1 or 0.")

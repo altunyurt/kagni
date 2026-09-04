@@ -4,6 +4,7 @@ from .basic import CommandSetMixin as BasicMixin
 from .set import CommandSetMixin as SetMixin
 from .bit import CommandSetMixin as BitMixin
 from .hash import CommandSetMixin as HashMixin
+from .lists import CommandSetMixin as ListMixin
 from kagni.constants import Error, Errors
 from kagni.data import Data
 from kagni.resp import protocolBuilder
@@ -13,7 +14,7 @@ log = logging.getLogger(__name__)
 __all__ = ["Commands"]
 
 
-class Commands(BasicMixin, SetMixin, BitMixin, HashMixin):
+class Commands(BasicMixin, SetMixin, BitMixin, HashMixin, ListMixin):
     def __init__(self, data=None):
         self.data = data if data is not None else Data()
         # optional snapshot backend, wired by the servers; FLUSHDB/FLUSHALL

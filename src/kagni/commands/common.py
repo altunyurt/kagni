@@ -5,12 +5,15 @@ checks the kind of the value stored under a key before operating on it,
 instead of crashing (or silently returning junk) when types are mixed.
 """
 
+from collections import deque
+
 from kagni.constants import Errors
 
 KIND_STRING = "string"
 KIND_HASH = "hash"
 KIND_SET = "set"
 KIND_BITMAP = "bitmap"
+KIND_LIST = "list"
 
 
 def kind_of(value):
@@ -26,6 +29,8 @@ def kind_of(value):
         return KIND_HASH
     if isinstance(value, set):
         return KIND_SET
+    if isinstance(value, (deque, list)):
+        return KIND_LIST
     return None
 
 

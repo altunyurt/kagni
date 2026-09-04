@@ -74,3 +74,16 @@ I've implemented the following commands up to now:
 - Srem
 - Sunion
 - Sunionstore
+- Lpush
+- Lpushx
+- Rpush
+- Rpushx
+- Llen
+- Lindex
+- Lset
+- Lrange
+- Ltrim
+- Lrem
+- Linsert
+- Lpop
+- Rpop

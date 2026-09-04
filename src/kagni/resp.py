@@ -13,6 +13,7 @@ __all__ = ["protocolBuilder", "protocolParser", "RESPReader", "ProtocolError"]
 responses_dict = {
    Response.OK: [b"+OK"],
    Response.NIL: [b"$-1"],
+   Response.NIL_ARRAY: [b"*-1"],
    Response.QUEUED: [b"+QUEUED"],
    Response.PONG: [b"+PONG"],
    Response.COMMAND: [b"+COMMAND"],

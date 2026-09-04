@@ -8,6 +8,7 @@ from .basic_sequence import test_sequence as basic_sequence
 from .bitops_sequence import test_sequence as bitops_sequence
 from .hash_sequence import test_sequence as hash_sequence
 from .set_sequence import test_sequence as set_sequence
+from .list_sequence import test_sequence as list_sequence
 
 # commands whose replies have no defined ordering in redis (set iteration
 # order depends on the process-randomised byte hash, so the comparison
@@ -17,7 +18,7 @@ UNORDERED = ("SMEMBERS", "SDIFF", "SINTER", "SUNION", "SPOP", "SRANDMEMBER")
 
 def test_commands():
     test_sequence = (
-        basic_sequence + bitops_sequence + hash_sequence + set_sequence
+        basic_sequence + bitops_sequence + hash_sequence + set_sequence + list_sequence
     )
 
     for item in test_sequence:
