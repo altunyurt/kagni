@@ -768,6 +768,56 @@ def test_msetnx_and_exists_expiry():
     assert c3.DBSIZE() == protocolBuilder(1)
 
 
+def test_scan_validation_and_expiry():
+    c = _commands()
+    err = _expect_error(lambda: c.SCAN(b"abc"))
+    assert err.message == "invalid cursor", err.message
+    _expect_error(lambda: c.SCAN(b"-1"))
+    _expect_error(lambda: c.SCAN(b"0", b"MATCH"))  # option without value
+    _expect_error(lambda: c.SCAN(b"0", b"COUNT", b"x"))
+    _expect_error(lambda: c.SCAN(b"0", b"BOGUS", b"1"))
+    # a non-zero cursor finishes the (single-step) iteration
+    assert c.SCAN(b"42") == protocolBuilder([b"0", []])
+    # expired keys are not scanned
+    c2 = _commands()
+    c2.SET(b"dead", b"x")
+    c2.EXPIRE(b"dead", b"-1")
+    c2.SET(b"live", b"y")
+    assert c2.SCAN(b"0") == protocolBuilder([b"0", [b"live"]])
+
+
+def test_client_subcommand_errors():
+    c = _commands()
+    reply = c.dispatch([b"CLIENT", b"KILL", b"1"])
+    assert b"Unknown subcommand" in reply, reply
+    assert b"wrong number of arguments" in c.dispatch([b"CLIENT", b"SETNAME"])
+    assert b"wrong number of arguments" in c.dispatch([b"CLIENT", b"SETINFO"])
+    assert b"wrong number of arguments" in c.dispatch([b"CLIENT"])
+    # valid shapes still work after the errors
+    assert c.CLIENT(b"SETINFO", b"lib-ver", b"5.0") == protocolBuilder(Response.OK)
+
+
+def test_incrbyfloat_validation():
+    c = _commands()
+    for bad in (b"abc", b"1e3", b"inf", b"nan", b"", b"--1", b"1.2.3"):
+        err = _expect_error(lambda: c.INCRBYFLOAT(b"k", bad))
+        assert err.message == "value is not a valid float", err.message
+    # a stored non-float value errors the same way
+    c.SET(b"s", b"not-a-float")
+    _expect_error(lambda: c.INCRBYFLOAT(b"s", b"1.5"))
+    # wrongtype
+    c.HSET(b"h", b"f", b"v")
+    _expect_error(lambda: c.INCRBYFLOAT(b"h", b"1"), "WRONGTYPE")
+    # overflow produces NaN/Infinity (increment as big as the stored max)
+    import sys as _sys
+
+    huge = format(_sys.float_info.max, "f").encode()
+    c2 = _commands()
+    c2.SET(b"big", huge)
+    err = _expect_error(lambda: c2.INCRBYFLOAT(b"big", huge))
+    assert err.message == "increment would produce NaN or Infinity", err.message
+
+
 def test_db_snapshot_replace_semantics():
     """The snapshot backend must behave identically on apsw and on the
     stdlib sqlite3 fallback."""

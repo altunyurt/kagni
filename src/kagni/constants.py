@@ -45,6 +45,8 @@ class Errors:
     )
     COUNT_NEG = Error("ERR", "COUNT can't be negative")
     MAXLEN_NEG = Error("ERR", "MAXLEN can't be negative")
+    NOT_FLOAT = Error("ERR", "value is not a valid float")
+    FLOAT_OVERFLOW = Error("ERR", "increment would produce NaN or Infinity")
     BIT_OFFSET = Error("ERR", "bit offset is not an integer or out of range")
     BIT_VALUE = Error("ERR", "bit is not an integer or out of range")
     BIT_ARG = Error("ERR", "The bit argument must be 1 or 0.")

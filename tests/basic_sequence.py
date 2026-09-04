@@ -598,4 +598,98 @@ test_sequence = [
         ],
         "returns": 2,
     },
+
+    ##
+    # INCRBYFLOAT / SCAN / CLIENT
+    ##
+    {
+        "name": "Check INCRBYFLOAT on a missing key starts from zero",
+        "command": "INCRBYFLOAT",
+        "args": [b"f", b"10.5"],
+        "returns": b"10.5",
+        "expects": lambda cs: cs.data.get(b"f") == b"10.5",
+    },
+    {
+        "name": "Check INCRBYFLOAT subtracts back to an integer",
+        "command": "INCRBYFLOAT",
+        "args": [b"f", b"-10.5"],
+        "depends": [
+            {"command": "INCRBYFLOAT", "args": [b"f", b"10.5"], "returns": b"10.5"}
+        ],
+        "returns": b"0",
+    },
+    {
+        "name": "Check INCRBYFLOAT float precision",
+        "command": "INCRBYFLOAT",
+        "args": [b"f", b"0.2"],
+        "depends": [{"command": "SET", "args": [b"f", b"0.1"], "returns": Response.OK}],
+        "returns": b"0.30000000000000004",
+    },
+    {
+        "name": "Check INCRBYFLOAT on an integer string",
+        "command": "INCRBYFLOAT",
+        "args": [b"f", b"0.5"],
+        "depends": [{"command": "SET", "args": [b"f", b"10"], "returns": Response.OK}],
+        "returns": b"10.5",
+    },
+    {
+        "name": "Check SCAN returns the whole snapshot in one step",
+        "command": "SCAN",
+        "args": [b"0"],
+        "depends": [
+            {"command": "SET", "args": [b"a", b"1"], "returns": Response.OK},
+            {"command": "SET", "args": [b"b", b"2"], "returns": Response.OK},
+        ],
+        "returns": [b"0", [b"a", b"b"]],
+    },
+    {
+        "name": "Check SCAN on an empty keyspace",
+        "command": "SCAN",
+        "args": [b"0"],
+        "returns": [b"0", []],
+    },
+    {
+        "name": "Check SCAN with MATCH",
+        "command": "SCAN",
+        "args": [b"0", b"MATCH", b"a*"],
+        "depends": [
+            {"command": "SET", "args": [b"a1", b"1"], "returns": Response.OK},
+            {"command": "SET", "args": [b"b1", b"2"], "returns": Response.OK},
+        ],
+        "returns": [b"0", [b"a1"]],
+    },
+    {
+        "name": "Check SCAN with TYPE filter",
+        "command": "SCAN",
+        "args": [b"0", b"TYPE", b"hash"],
+        "depends": [
+            {"command": "SET", "args": [b"str", b"1"], "returns": Response.OK},
+            {"command": "HSET", "args": [b"hsh", b"f", b"v"], "returns": 1},
+        ],
+        "returns": [b"0", [b"hsh"]],
+    },
+    {
+        "name": "Check CLIENT SETINFO is accepted",
+        "command": "CLIENT",
+        "args": [b"SETINFO", b"lib-name", b"redis-py"],
+        "returns": Response.OK,
+    },
+    {
+        "name": "Check CLIENT SETNAME is accepted",
+        "command": "CLIENT",
+        "args": [b"SETNAME", b"conn-1"],
+        "returns": Response.OK,
+    },
+    {
+        "name": "Check CLIENT GETNAME returns an empty bulk",
+        "command": "CLIENT",
+        "args": [b"GETNAME"],
+        "returns": b"",
+    },
+    {
+        "name": "Check CLIENT ID",
+        "command": "CLIENT",
+        "args": [b"ID"],
+        "returns": 1,
+    },
 ]

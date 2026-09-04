@@ -1,5 +1,6 @@
 from typing import List
 import fnmatch
+import math
 import re
 import time as _wall
 
@@ -59,6 +60,19 @@ TYPE_NAMES = {
     KIND_SET: "set",
     KIND_BITMAP: "string",
 }
+
+
+# decimal floats like redis parses them: no exponent, no inf/nan
+RE_FLOAT = re.compile(rb"[+-]?(\d+(\.\d*)?|\.\d+)\Z", re.ASCII)
+
+
+def _format_float(value):
+    """Format an incrbyfloat result like redis: shortest repr, integer
+    values without a trailing '.0'."""
+    text = repr(value)
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text
 
 
 def _expire_time_error(command):
@@ -160,6 +174,29 @@ class CommandSetMixin:
         if val is None:
             return SimpleString("none")
         return SimpleString(TYPE_NAMES.get(kind_of(val), "none"))
+
+    @command_decorator(b"CLIENT")
+    def CLIENT(self, *args: bytes):
+        """Minimal CLIENT: stubs for what real clients probe on connect.
+        redis-py >= 5 sends CLIENT SETINFO on every connection; names and
+        ids are not tracked per connection (stateless server)."""
+        if not args:
+            raise Errors.arity("client")
+        sub = args[0].upper()
+        if sub == b"SETINFO" and len(args) == 3:
+            return Response.OK
+        if sub == b"SETNAME" and len(args) == 2:
+            return Response.OK
+        if sub == b"GETNAME" and len(args) == 1:
+            return b""
+        if sub == b"ID" and len(args) == 1:
+            return 1
+        name = sub.decode("ascii", "replace")
+        raise Error(
+            "ERR",
+            "Unknown subcommand or wrong number of arguments for '{}'. "
+            "Try CLIENT HELP.".format(name),
+        )
 
     @command_decorator(b"CONFIG")
     def CONFIG(self, *args: bytes) -> list:
@@ -332,6 +369,68 @@ class CommandSetMixin:
         return [key for key in self.data if rgx.match(key)]
 
     # ------------------------------------------------------------- keyspace
+    @command_decorator(b"SCAN")
+    def SCAN(self, cursor: bytes, *options: bytes):
+        """SCAN cursor [MATCH pattern] [COUNT n] [TYPE type]
+
+        kagni returns the whole snapshot in one step: cursor 0 yields
+        every matching key and cursor 0 again, which satisfies the redis
+        guarantee that keys present for the whole scan are returned at
+        least once.  COUNT is only a hint (ignored); TYPE filters by the
+        TYPE command's names.
+        """
+        try:
+            cursor_value = int(cursor, 10)
+        except (ValueError, TypeError):
+            raise Errors.INVALID_CURSOR
+        if cursor_value < 0:
+            raise Errors.INVALID_CURSOR
+        if cursor_value != 0:
+            # kagni never emits non-zero cursors: treat any other value
+            # as an already-finished iteration
+            return [b"0", []]
+
+        pattern = None
+        type_filter = None
+        j = 0
+        while j < len(options):
+            opt = options[j].upper()
+            if opt in (b"MATCH", b"COUNT", b"TYPE") and j + 1 < len(options):
+                value = options[j + 1]
+                j += 2
+                if opt == b"MATCH":
+                    pattern = value
+                elif opt == b"COUNT":
+                    try:
+                        int(value, 10)
+                    except (ValueError, TypeError):
+                        raise Errors.NOT_INT
+                else:
+                    type_filter = value.lower().decode("ascii", "replace")
+            else:
+                raise Errors.SYNTAX
+
+        if pattern is not None:
+            re_pattern = fnmatch.translate(
+                pattern.decode("utf-8", "surrogateescape")
+            )
+            rgx = re.compile(re_pattern.encode("utf-8", "surrogateescape"))
+        else:
+            rgx = None
+
+        keys = []
+        for key in list(self.data):
+            if rgx is not None and not rgx.match(key):
+                continue
+            if type_filter is not None:
+                val = self.data.get(key)
+                if val is None:
+                    continue
+                if TYPE_NAMES.get(kind_of(val)) != type_filter:
+                    continue
+            keys.append(key)
+        return [b"0", keys]
+
     @command_decorator(b"EXISTS")
     def EXISTS(self, *keys) -> int:
         if not keys:
@@ -374,6 +473,26 @@ class CommandSetMixin:
     @command_decorator(b"INCR")
     def INCR(self, key: bytes) -> int:
         return self._bump(key, 1)
+
+    @command_decorator(b"INCRBYFLOAT")
+    def INCRBYFLOAT(self, key: bytes, increment: bytes) -> bytes:
+        if not RE_FLOAT.match(increment):
+            raise Errors.NOT_FLOAT
+
+        val = self._string(key)
+        if val is None:
+            current = 0.0
+        elif RE_FLOAT.match(val):
+            current = float(val)
+        else:
+            raise Errors.NOT_FLOAT
+
+        result = current + float(increment)
+        if not math.isfinite(result):
+            raise Errors.FLOAT_OVERFLOW
+        text = _format_float(result)
+        self.data[key] = text.encode()
+        return text.encode()
 
     @command_decorator(b"DECRBY")
     def DECRBY(self, key: bytes, i: int) -> int:
