@@ -1032,6 +1032,15 @@ def test_commands():
             if callable(returns):
                 print(protocolParser(retval), cs.data, returns)
                 assert returns(protocolParser(retval), cs)  # should return truthy
+            elif (
+                item["command"]
+                in ("SMEMBERS", "SDIFF", "SINTER", "SUNION", "SPOP", "SRANDMEMBER")
+                and isinstance(returns, list)
+            ):
+                # redis makes no ordering promise for these commands and set
+                # iteration order depends on the (randomised) byte hash, so
+                # compare as multisets
+                assert sorted(protocolParser(retval)) == sorted(returns), item["name"]
             else:
                 assert retval == protocolBuilder(returns), item["name"]
 

@@ -37,6 +37,7 @@ I've implemented the following commands up to now:
 - Mset
 - Del
 - Expire
+- Persist
 - Ttl
 - Keys
 - Incr
@@ -70,4 +71,6 @@ I've implemented the following commands up to now:
 - Smove
 - Spop
 - Srandmember
-- Srem 
+- Srem
+- Sunion
+- Sunionstore

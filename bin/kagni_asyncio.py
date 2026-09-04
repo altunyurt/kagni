@@ -1,62 +1,123 @@
 # /usr/bin/env python
 
 import asyncio
-import uvloop
 import logging
-from kagni.commands import Commands
-from kagni.data import Data
-from kagni.resp import protocolParser
-import collections
+import os
 from functools import partial
 
-log = logging.getLogger()
-log.setLevel(logging.DEBUG)
-log.addHandler(logging.StreamHandler())
+try:
+    import uvloop
+except ImportError:  # uvloop is optional: plain asyncio still works
+    uvloop = None
+
+from kagni.commands import Commands
+from kagni.data import Data
+from kagni.db import DB
+from kagni.resp import RESPReader, ProtocolError
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
+)
+log = logging.getLogger("kagni.asyncio")
+
+DB_PATH = os.environ.get("KAGNI_DB", "kagni.sqlite")
+DUMP_INTERVAL_SECS = 20
 
 
-# her bağlantıda çağrılıyor bu
 class RedisServerProtocol(asyncio.Protocol):
+    """One RESPReader per connection provides correct framing: partial
+    reads, pipelined commands and CRLF bytes inside bulk values all work,
+    and protocol errors close the connection with a -ERR line instead of
+    killing the loop."""
+
     def __init__(self, command_handler):
-        self.response = collections.deque()
-        self.c_handler = command_handler
+        self._handler = command_handler
+        self._parser = RESPReader()
+        self._transport = None
 
     def connection_made(self, transport):
-        self.transport = transport
+        self._transport = transport
 
     def data_received(self, data):
+        if self._transport is None:
+            return
+        try:
+            for request in self._parser.feed(data):
+                reply = self._handler.dispatch(request)
+                if reply is not None:
+                    self._transport.write(reply)
+        except ProtocolError as exc:
+            log.warning("protocol error: %s", exc)
+            self._transport.write(
+                b"-ERR Protocol error: " + str(exc).encode() + b"\r\n"
+            )
+            self._transport.close()
 
-        resp = b""
-        req = protocolParser(data)
-
-        cmd_text = req[0].upper()
-        command = getattr(self.c_handler, cmd_text.decode())
-        if not command:
-            resp = f"-Unknown command {cmd_text}\r\n".encode()
-        else:
-            resp = command(*req[1:])
-        self.response.append(resp)
-
-        self.transport.writelines(self.response)
-        self.response.clear()
+    def connection_lost(self, exc):
+        self._transport = None
 
 
-def main(hostname="localhost", port=6380):
-    uvloop.install()
-    loop = asyncio.get_event_loop()
-    command_handler = Commands(data=Data())
-    protocolHandler = partial(lambda *n: RedisServerProtocol(command_handler))
-    coro = loop.create_server(protocolHandler, hostname, port)
-    server = loop.run_until_complete(coro)
-    print("Listening on port {}".format(port))
+async def dumper(db, data):
+    """Periodically snapshot the in-memory state to sqlite."""
+    loop = asyncio.get_running_loop()
+    while True:
+        await asyncio.sleep(DUMP_INTERVAL_SECS)
+        if not data:
+            continue
+        try:
+            await loop.run_in_executor(None, db.dump, data)
+        except Exception:
+            log.exception("database dump failed")
+
+
+def _restore(db, data):
     try:
-        loop.run_forever()
-    except KeyboardInterrupt:
-        print("User requested shutdown.")
+        snapshot = db.load()
+    except Exception:
+        log.exception("could not restore snapshot, starting empty")
+        return
+    for key, value in snapshot.items():
+        data[key] = value
+    if len(data):
+        log.info("restored %d keys", len(data))
+
+
+async def amain(hostname="localhost", port=6380, db_path=DB_PATH):
+    db = DB(db_path)
+    data = Data()
+    _restore(db, data)
+
+    command_handler = Commands(data)
+    command_handler.persistence = db
+
+    loop = asyncio.get_running_loop()
+    dumper_task = asyncio.create_task(dumper(db, data))
+    try:
+        server = await loop.create_server(
+            partial(RedisServerProtocol, command_handler), hostname, port
+        )
+        log.info("kagni listening on %s:%s (db: %s)", hostname, port, db_path)
+        async with server:
+            await server.serve_forever()
     finally:
-        server.close()
-        loop.run_until_complete(server.wait_closed())
-        loop.close()
-        print("Redis is now ready to exit.")
+        dumper_task.cancel()
+        try:
+            await dumper_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await loop.run_in_executor(None, db.dump, data)
+        except Exception:
+            log.exception("final database dump failed")
+
+
+def main(hostname="localhost", port=6380, db_path=DB_PATH):
+    if uvloop is not None:
+        uvloop.install()
+    try:
+        asyncio.run(amain(hostname, port, db_path))
+    except KeyboardInterrupt:
+        log.info("User requested shutdown.")
     return 0
 
 

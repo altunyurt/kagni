@@ -1,88 +1,110 @@
 # /usr/bin/env python
 
-import trio
 import logging
-from collections import deque
+import os
 from functools import partial
+
+import trio
+
 from kagni.commands import Commands
 from kagni.data import Data
 from kagni.db import DB
-from kagni.resp import protocolParser
+from kagni.resp import RESPReader, ProtocolError
 
-log = logging.getLogger()
-log.setLevel(logging.DEBUG)
-log.addHandler(logging.StreamHandler())
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
+)
+log = logging.getLogger("kagni.trio")
+
+DB_PATH = os.environ.get("KAGNI_DB", "kagni.sqlite")
+DUMP_INTERVAL_SECS = 20
 
 
-async def protocolHandler(stream, command_handler=None):
-    response = deque()
-
+async def protocol_handler(stream, command_handler=None):
+    """Per-connection RESP handler with incremental framing (partial
+    reads / pipelining / CRLF-safe bulk values)."""
+    parser = RESPReader()
     try:
         while True:
-            data = await stream.receive_some(65535)
+            data = await stream.receive_some(65536)
             if not data:
                 return
 
-            req = protocolParser(data)
+            for request in parser.feed(data):
+                reply = command_handler.dispatch(request)
+                if reply is not None:
+                    await stream.send_all(reply)
+    except ProtocolError as exc:
+        log.warning("protocol error: %s", exc)
+        try:
+            await stream.send_all(
+                b"-ERR Protocol error: " + str(exc).encode() + b"\r\n"
+            )
+        except (trio.BrokenResourceError, trio.ClosedResourceError):
+            pass
+    except (trio.BrokenResourceError, trio.ClosedResourceError):
+        pass
+    except Exception:
+        log.exception("connection handler failed")
 
-            cmd_text = req[0].upper()
-            command = getattr(command_handler, cmd_text.decode())  # command name in bytes
-            if not command:
-                resp = f"-Unknown command {cmd_text} \r\n".encode()
-            else:
-                resp = command(*req[1:])
-            response.append(resp)
-            await stream.send_all(b"".join(response))
-            response.clear()
-    except trio.BrokenResourceError:
-        import traceback
 
-        print(traceback.format_exc())
-    except:
-        import traceback
-
-        print(traceback.format_exc())
-
-    finally:
-        response.clear()
-        return
-
-from time import sleep 
-
-# dump database periodically
 async def dumper(db, data):
+    """Periodically snapshot the in-memory state to sqlite, off the loop."""
     while True:
-        db.dump(data)
-        # await trio.sleep(2000)  # secs
-        sleep(20)
-        # async trio sqlite gerekiyor 
+        await trio.sleep(DUMP_INTERVAL_SECS)
+        if not data:
+            continue
+        try:
+            await trio.to_thread.run_sync(db.dump, data)
+        except Exception:
+            log.exception("database dump failed")
 
-        print("yea")
+
+def _restore(db, data):
+    try:
+        snapshot = db.load()
+    except Exception:
+        log.exception("could not restore snapshot, starting empty")
+        return
+    for key, value in snapshot.items():
+        data[key] = value
+    if len(data):
+        log.info("restored %d keys", len(data))
 
 
-async def main(hostname="localhost", port=6380):
-    print("Listening on port {}".format(port))
+async def main(hostname="localhost", port=6380, db_path=DB_PATH):
+    db = DB(db_path)
+    data = Data()
+    _restore(db, data)
+
+    command_handler = Commands(data)
+    command_handler.persistence = db
+    log.info("kagni listening on %s:%s (db: %s)", hostname, port, db_path)
 
     try:
-        data = Data()
-        db = DB('./deneme.sqlite')
-        c_handler = Commands(data)
-        server = partial(
-            trio.serve_tcp,
-            partial(protocolHandler, command_handler=c_handler),
-            port=port,
-            host=hostname,
-        )
         async with trio.open_nursery() as nursery:
-            # nursery.start_soon(dumper, db, data)
-            nursery.start_soon(server)
-    except KeyboardInterrupt:
-        print("User requested shutdown.")
+            nursery.start_soon(dumper, db, data)
+            nursery.start_soon(
+                partial(
+                    trio.serve_tcp,
+                    partial(protocol_handler, command_handler=command_handler),
+                    port,
+                    host=hostname,
+                )
+            )
     finally:
-        print("Redis is now ready to exit.")
+        # best-effort final snapshot on shutdown
+        try:
+            db.dump(data)
+        except Exception:
+            log.exception("final database dump failed")
     return 0
 
 
 if __name__ == "__main__":
-    trio.run(main)
+    try:
+        trio.run(main)
+    except KeyboardInterrupt:
+        log.info("User requested shutdown.")
+
 # vim: set filetype=python

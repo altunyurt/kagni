@@ -1,0 +1,24 @@
+[project]
+name = "kagni"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Özgür Altunyurt", email = "altunyurt@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "apsw>=3.53.4.0",
+    "pyroaring>=1.1.0",
+    "trio>=0.34.0",
+    "uvloop>=0.22.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
