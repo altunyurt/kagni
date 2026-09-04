@@ -50,6 +50,16 @@ def protocolBuilder(value):
     return response
 
 
+def _wire_length(message):
+    """Exact wire size of a parsed message, or None when it cannot be
+    re-encoded canonically (nulls/errors) — boundary tracking then stays
+    disabled for the connection."""
+    try:
+        return len(protocolBuilder(message))
+    except (NotImplementedError, TypeError):
+        return None
+
+
 class ProtocolError(Exception):
     """Malformed RESP payload.  The connection should receive a ``-ERR``
     line and be closed (matching redis behaviour on protocol errors)."""
@@ -165,8 +175,9 @@ class RESPReader:
     - ``"hiredis"`` (default when hiredis is installed): C-speed parsing.
       hiredis itself rejects redis *inline* commands (``PING\r\n``), which
       redis-benchmark's PING_INLINE test and telnet users send, so this
-      class intercepts inline command lines at message boundaries before
-      they reach hiredis (see ``_feed_hiredis``).
+      class parses inline command lines itself whenever the connection is
+      at a message boundary (boundary tracking is exact for well-formed
+      frames: fed vs. parsed byte counts).
     - ``"python"``: pure-python parser, always available.  It also applies
       a buffer cap (mirroring redis' proto-max-bulk-len) against a peer
       that announces a giant payload and never delivers it.
@@ -190,10 +201,16 @@ class RESPReader:
         self._engine = engine
         self._buffer = bytearray()
         self._reader = hiredis.Reader() if engine == "hiredis" else None
-        # inline interception state (hiredis engine only): once a RESP
-        # framed message has been handed to hiredis it owns the stream
-        # (it may hold a partial frame internally)
+        # inline interception state (hiredis engine only): hiredis rejects
+        # inline commands, so they are parsed here while the connection is
+        # at a message boundary.  Once a RESP-framed message is handed to
+        # hiredis it owns the stream until fed/consumed byte counts prove
+        # it is back at a boundary (canonical RESP re-encoding length is
+        # exact for well-formed client frames).
         self._engaged = False
+        self._boundary_unknown = False
+        self._fed = 0
+        self._consumed = 0
 
     @property
     def engine(self):
@@ -207,12 +224,11 @@ class RESPReader:
     def _feed_hiredis(self, data):
         messages = []
 
-        if not self._engaged:
+        if not self._engaged and not self._boundary_unknown:
             # hiredis rejects redis *inline* commands ("PING\r\n", used by
             # redis-benchmark's PING_INLINE and telnet), so while the
-            # connection is still at a message boundary we parse inline
-            # command lines ourselves and only hand RESP-framed data to
-            # hiredis.
+            # connection is at a message boundary we parse inline command
+            # lines ourselves and only hand RESP-framed data to hiredis.
             self._buffer.extend(data)
             if len(self._buffer) > self.MAX_BUFFER:
                 raise ProtocolError("request exceeds maximum allowed size")
@@ -220,7 +236,7 @@ class RESPReader:
             while self._buffer:
                 if self._buffer[0] in _RESP_MARKERS:
                     # a framed message starts here: hiredis owns the
-                    # stream from now on (it may buffer a partial frame)
+                    # stream until it provably returns to a boundary
                     self._engaged = True
                     data = bytes(self._buffer)
                     self._buffer.clear()
@@ -239,14 +255,33 @@ class RESPReader:
         try:
             if data:
                 self._reader.feed(data)
+                self._fed += len(data)
             while True:
                 message = self._reader.gets()
                 if message is False:  # hiredis: no complete message buffered
-                    return messages
+                    break
                 # None is a legitimate parsed value (null bulk / null array)
                 messages.append(message)
+                wire_len = _wire_length(message)
+                if wire_len is None:
+                    self._boundary_unknown = True
+                else:
+                    self._consumed += wire_len
         except hiredis.HiredisError as exc:
             raise ProtocolError(str(exc))
+
+        if (
+            self._engaged
+            and not self._boundary_unknown
+            and self._fed
+            and self._fed == self._consumed
+        ):
+            # every byte handed to hiredis has been parsed: it is back at
+            # a message boundary, so inline interception can resume
+            self._engaged = False
+            self._fed = 0
+            self._consumed = 0
+        return messages
 
     def _feed_python(self, data):
         self._buffer.extend(data)

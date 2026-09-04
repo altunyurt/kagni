@@ -101,9 +101,24 @@ async def main(hostname="localhost", port=6380, db_path=DB_PATH):
     return 0
 
 
+def _parse_args(argv):
+    hostname, port, db_path = "localhost", 6380, DB_PATH
+    if argv:
+        hostname = argv[0]
+    if len(argv) > 1:
+        port = int(argv[1])
+    if len(argv) > 2:
+        db_path = argv[2]
+    return hostname, port, db_path
+
+
 if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 4:
+        raise SystemExit("usage: kagni_trio.py [host] [port] [db_path]")
     try:
-        trio.run(main)
+        trio.run(main, *_parse_args(sys.argv[1:]))
     except KeyboardInterrupt:
         log.info("User requested shutdown.")
 

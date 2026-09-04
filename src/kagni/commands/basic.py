@@ -2,7 +2,7 @@ from typing import List
 import fnmatch
 import re
 
-from kagni.constants import Errors, Response
+from kagni.constants import Error, Errors, Response
 from kagni.data import Data
 from .common import KIND_STRING, expect_kind, kind_of
 from .decorator import command_decorator
@@ -17,6 +17,27 @@ RE_NUMERIC = re.compile(rb"-?\d+\Z", re.ASCII)
 # redis-compatible cap for a single string value (proto-max-bulk-len)
 MAX_STRING_SIZE = 512 * 1024 * 1024
 
+# parameters exposed through CONFIG GET (redis-benchmark probes these;
+# real redis replies with a flat list of alternating name/value pairs)
+CONFIG_VALUES = {
+    b"maxmemory": b"0",
+    b"maxmemory-policy": b"noeviction",
+    b"save": b"",
+    b"appendonly": b"no",
+}
+
+
+def _config_get(pattern: bytes) -> list:
+    """CONFIG GET reply: every matching parameter as name/value pairs,
+    or an empty array when nothing matches (redis behaviour)."""
+    re_pattern = fnmatch.translate(pattern.decode("utf-8", "surrogateescape"))
+    rgx = re.compile(re_pattern.encode("utf-8", "surrogateescape"))
+    reply = []
+    for name in sorted(CONFIG_VALUES):
+        if rgx.match(name):
+            reply.extend((name, CONFIG_VALUES[name]))
+    return reply
+
 __all__ = ["CommandSetMixin"]
 
 
@@ -28,6 +49,30 @@ class CommandSetMixin:
     @command_decorator(b"COMMAND")
     def COMMAND(self, *args) -> Response.OK:
         return Response.OK
+
+    @command_decorator(b"CONFIG")
+    def CONFIG(self, *args: bytes) -> list:
+        """Minimal CONFIG: GET is enough for clients that probe the server
+        (redis-benchmark fetches ``save`` and ``appendonly`` at startup and
+        warns when the reply is missing).
+
+        Values describe kagni honestly: no maxmemory limit, no classic
+        snapshot "save" policy (the sqlite dump runs in a worker thread
+        and is not fork-based), no appendonly file.
+        """
+        if not args:
+            raise Errors.arity("config")
+        subcommand = args[0].upper()
+        if subcommand == b"GET":
+            if len(args) != 2:
+                raise Errors.arity("config|get")
+            return _config_get(args[1])
+        raise Error(
+            "ERR",
+            "Unknown CONFIG subcommand or wrong number of arguments for {}".format(
+                subcommand.decode("ascii", "replace")
+            ),
+        )
 
     # ------------------------------------------------------------- helpers
     def _string(self, key):

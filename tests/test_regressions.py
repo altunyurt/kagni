@@ -321,6 +321,29 @@ def test_resp_reader_inline_then_framed():
         assert reader.feed(wire) == [[b"PING"], [b"PING"]], reader.engine
 
 
+def test_resp_reader_framed_then_inline():
+    """Once hiredis has parsed every byte handed to it, the connection is
+    back at a message boundary and inline commands must work again (mixed
+    telnet/benchmark-style usage on one connection)."""
+    for reader in _readers():
+        assert reader.feed(b"*1\r\n$4\r\nPING\r\n") == [[b"PING"]], reader.engine
+        assert reader.feed(b"PING\r\n") == [[b"PING"]], reader.engine
+        # pipelined framed batch, then inline batch
+        assert reader.feed(b"*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n") == [
+            [b"PING"],
+            [b"PING"],
+        ], reader.engine
+        assert reader.feed(b"PING\r\nPING\r\n") == [
+            [b"PING"],
+            [b"PING"],
+        ], reader.engine
+        # partial framed frame completes, then inline again
+        reader2 = RESPReader(engine=reader.engine)
+        assert reader2.feed(b"*1\r\n$4\r\nPIN") == []
+        assert reader2.feed(b"G\r\n") == [[b"PING"]], reader.engine
+        assert reader2.feed(b"PING\r\n") == [[b"PING"]], reader.engine
+
+
 def test_protocol_parser_one_shot_inline():
     assert protocolParser(b"PING\r\n") == [b"PING"]
 
@@ -377,6 +400,33 @@ def test_dispatch_unknown_command_and_arity():
     assert c.dispatch([b"GET", b"k"]) == protocolBuilder(b"v")
     # an unknown command must not kill the handler for the next request
     assert c.dispatch([b"PING"]) == protocolBuilder(Response.PONG)
+
+
+def test_config_get():
+    c = _commands()
+    # redis-benchmark probes exactly these two at startup
+    assert c.dispatch([b"CONFIG", b"GET", b"save"]) == protocolBuilder(
+        [b"save", b""]
+    )
+    assert c.dispatch([b"CONFIG", b"GET", b"appendonly"]) == protocolBuilder(
+        [b"appendonly", b"no"]
+    )
+    assert c.dispatch([b"CONFIG", b"GET", b"maxmemory"]) == protocolBuilder(
+        [b"maxmemory", b"0"]
+    )
+    # unknown parameter: empty array, like redis
+    assert c.dispatch([b"CONFIG", b"GET", b"nope"]) == protocolBuilder([])
+    # wildcard
+    reply = protocolParser(c.dispatch([b"CONFIG", b"GET", b"*"]))
+    assert reply == [
+        b"appendonly", b"no", b"maxmemory", b"0",
+        b"maxmemory-policy", b"noeviction", b"save", b"",
+    ]
+    # arity / unknown subcommand errors
+    assert b"wrong number of arguments" in c.dispatch([b"CONFIG", b"GET"])
+    reply = c.dispatch([b"CONFIG", b"SET", b"save", b"900 1"])
+    assert b"Unknown CONFIG subcommand" in reply
+    assert b"wrong number of arguments" in c.dispatch([b"CONFIG"])
 
 
 # ---------------------------------------------------------------------- db
