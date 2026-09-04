@@ -5,6 +5,15 @@ Kagni - Kağnı in Turkish is a form of tumbrel, pulled by bullocks used for car
 
 Performance will get better hopefully :) 
 
+### Running
+
+    ./kagni.py --loop asyncio|trio [--host HOST] [--port PORT]
+               [--socket PATH] [--db PATH] [--dump-interval SECS]
+
+TCP (default `localhost:6380`) and a unix domain socket (`--socket`) are
+additive, like redis: `--port 0` disables TCP for socket-only setups.
+`uv run kagni` is equivalent to `./kagni.py`.
+
 ### Details
 
 #### Asyncio / Trio
