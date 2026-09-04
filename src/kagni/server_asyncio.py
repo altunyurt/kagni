@@ -9,7 +9,13 @@ try:
 except ImportError:  # uvloop is optional: plain asyncio still works
     uvloop = None
 
-from kagni.cli import build_runtime, prepare_socket_path, remove_socket_file
+from kagni.cli import (
+    _install_sigterm_handler,
+    _restore_sigterm_handler,
+    build_runtime,
+    prepare_socket_path,
+    remove_socket_file,
+)
 from kagni.resp import RESPReader, ProtocolError
 
 log = logging.getLogger("kagni.asyncio")
@@ -109,4 +115,10 @@ def run(config):
     """Synchronous entry point used by kagni.cli.main."""
     if uvloop is not None and not config.no_uvloop:
         uvloop.install()
-    return asyncio.run(amain(config))
+    # graceful SIGTERM: asyncio unwinds safely when the handler raises
+    # KeyboardInterrupt (unlike trio, see server_trio)
+    _install_sigterm_handler()
+    try:
+        return asyncio.run(amain(config))
+    finally:
+        _restore_sigterm_handler()

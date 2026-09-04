@@ -1,6 +1,7 @@
 """trio backend for kagni."""
 
 import logging
+import signal
 from functools import partial
 
 import trio
@@ -51,6 +52,17 @@ async def dumper(db, data, interval):
             log.exception("database dump failed")
 
 
+async def _sigterm_watcher(cancel_scope):
+    """Graceful SIGTERM for trio: cancel the serving nursery from inside
+    the run so trio unwinds at safe checkpoints (raising KeyboardInterrupt
+    from a signal handler corrupts trio's io bookkeeping).  Runs as a
+    nursery child so trio's own SIGINT handling is unaffected."""
+    with trio.open_signal_receiver(signal.SIGTERM) as signals:
+        async for _ in signals:
+            log.info("SIGTERM received, shutting down")
+            cancel_scope.cancel()
+
+
 async def amain(config):
     db, data, handler = build_runtime(config.db_path, save=config.save)
     store = "in-memory" if db is None else config.db_path
@@ -78,6 +90,7 @@ async def amain(config):
                 partial(protocol_handler, command_handler=handler),
                 listeners,
             )
+            nursery.start_soon(_sigterm_watcher, nursery.cancel_scope)
     finally:
         if db is not None and config.save:
             # best-effort final snapshot on shutdown (serve_listeners closed

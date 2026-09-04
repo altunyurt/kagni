@@ -25,7 +25,7 @@ blocking commands, replication, transactions or pub/sub.
 
 ## Running
 
-Requires Python 3.13+.
+Requires Python 3.10+ (developed on 3.13).
 
     uv sync                    # install deps and the `kagni` console script
     uv run kagni --help        # or: uv run python -m kagni

@@ -15,6 +15,7 @@ import logging
 import os
 import signal
 import socket
+import sys
 
 from kagni import __version__
 from kagni.commands import Commands
@@ -288,9 +289,35 @@ def _remove_pidfile(path):
 
 
 def _sigterm_handler(signum, frame):
-    """Services stop daemons with SIGTERM; route it through the same
-    graceful path as Ctrl-C so the final snapshot still happens."""
+    """SIGTERM handler for the asyncio backend: services stop daemons
+    with SIGTERM; route it through the same graceful path as Ctrl-C so
+    the final snapshot still happens.  (The trio backend handles SIGTERM
+    with a signal receiver instead - raising KeyboardInterrupt from a
+    signal handler at an arbitrary bytecode position corrupts trio's io
+    bookkeeping.)"""
     raise KeyboardInterrupt
+
+
+def _install_sigterm_handler():
+    """Called by the asyncio backend only (see _sigterm_handler)."""
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
+
+def _restore_sigterm_handler():
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
+def _wraps_keyboard_interrupt(exc):
+    """trio delivers SIGINT/SIGTERM wrapped in (possibly nested) exception
+    groups: the native ExceptionGroup on Python 3.11+ (PEP 654) or the
+    `exceptiongroup` backport below it.  Recurse so nested nursery groups
+    are recognised as clean shutdowns too."""
+    if isinstance(exc, KeyboardInterrupt):
+        return True
+    exceptions = getattr(exc, "exceptions", None)
+    if not isinstance(exceptions, (list, tuple)):
+        return False
+    return any(_wraps_keyboard_interrupt(e) for e in exceptions)
 
 
 def main(argv=None):
@@ -302,7 +329,6 @@ def main(argv=None):
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         filename=config.logfile,
     )
-    signal.signal(signal.SIGTERM, _sigterm_handler)
 
     if config.daemon:
         _daemonize()
@@ -311,13 +337,24 @@ def main(argv=None):
 
     backend = "server_trio" if config.loop == "trio" else "server_asyncio"
     engine = importlib.import_module("kagni." + backend)
+    # trio interrupts surface as BaseExceptionGroup on 3.11+; on 3.10 the
+    # `exceptiongroup` backport provides the same type (trio depends on
+    # it there), and plain groups are ordinary Exceptions below that
+    if sys.version_info >= (3, 11):
+        interrupted_group = (BaseExceptionGroup,)
+    else:
+        try:
+            from exceptiongroup import BaseExceptionGroup as BackportGroup
+        except ImportError:  # asyncio-only install without trio
+            interrupted_group = (Exception,)
+        else:
+            interrupted_group = (BackportGroup, Exception)
     try:
         engine.run(config)
     except KeyboardInterrupt:
         log.info("User requested shutdown.")
-    except BaseExceptionGroup as group:
-        # trio delivers SIGINT/SIGTERM as a group wrapping KeyboardInterrupt
-        if any(isinstance(exc, KeyboardInterrupt) for exc in group.exceptions):
+    except interrupted_group as exc:
+        if _wraps_keyboard_interrupt(exc):
             log.info("User requested shutdown.")
         else:
             log.exception("server exited with an error")
