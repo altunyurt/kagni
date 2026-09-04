@@ -62,7 +62,7 @@ async def dumper(db, data, interval):
 
 
 async def amain(config):
-    db, data, handler = build_runtime(config.db_path)
+    db, data, handler = build_runtime(config.db_path, save=config.save)
     loop = asyncio.get_running_loop()
     factory = partial(RedisServerProtocol, handler)
     store = "in-memory" if db is None else config.db_path
@@ -80,7 +80,7 @@ async def amain(config):
             created_socket = path
             log.info("kagni listening on %s (db: %s)", path, store)
 
-        if db is not None:
+        if db is not None and config.save:
             dumper_task = asyncio.create_task(dumper(db, data, config.dump_interval))
         await asyncio.gather(*(server.serve_forever() for server in servers))
     finally:
@@ -96,7 +96,7 @@ async def amain(config):
                 await dumper_task
             except asyncio.CancelledError:
                 pass
-        if db is not None:
+        if db is not None and config.save:
             try:
                 await loop.run_in_executor(None, db.dump, data)
             except Exception:

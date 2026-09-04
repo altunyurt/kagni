@@ -52,7 +52,7 @@ async def dumper(db, data, interval):
 
 
 async def amain(config):
-    db, data, handler = build_runtime(config.db_path)
+    db, data, handler = build_runtime(config.db_path, save=config.save)
     store = "in-memory" if db is None else config.db_path
 
     listeners = []
@@ -71,7 +71,7 @@ async def amain(config):
             log.info("kagni listening on %s (db: %s)", path, store)
 
         async with trio.open_nursery() as nursery:
-            if db is not None:
+            if db is not None and config.save:
                 nursery.start_soon(dumper, db, data, config.dump_interval)
             nursery.start_soon(
                 trio.serve_listeners,
@@ -79,7 +79,7 @@ async def amain(config):
                 listeners,
             )
     finally:
-        if db is not None:
+        if db is not None and config.save:
             # best-effort final snapshot on shutdown (serve_listeners closed
             # the listeners when the nursery was cancelled)
             try:

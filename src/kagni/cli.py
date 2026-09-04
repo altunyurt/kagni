@@ -31,7 +31,7 @@ class Config:
     """Everything the server backends need to know about this run."""
 
     def __init__(self, loop, host, port, socket_path, db_path,
-                 dump_interval, no_uvloop):
+                 dump_interval, no_uvloop, save=True):
         self.loop = loop
         self.host = host
         self.port = port
@@ -39,6 +39,7 @@ class Config:
         self.db_path = db_path
         self.dump_interval = dump_interval
         self.no_uvloop = no_uvloop
+        self.save = save
 
 
 # ------------------------------------------------------------ shared runtime
@@ -52,12 +53,25 @@ def is_memory_mode(db_path):
     return db_path is None or db_path == MEMORY_DB
 
 
-def build_runtime(db_path):
+def build_runtime(db_path, save=True):
     """Create the store and wire up the command handler.  Shared by both
-    backends.  Returns ``(db, data, handler)``; *db* is None in memory
-    mode, which tells the engines to skip the dumper and final dump."""
+    backends.  Returns ``(db, data, handler)``; *db* is None when there is
+    nothing to snapshot (memory mode, or no-save without an existing
+    file), which tells the engines to skip the dumper and final dump.
+
+    With ``save=False`` (the --no-save flag, redis' ``save ""``) an
+    existing snapshot file is still loaded at boot, but nothing is ever
+    written back: no periodic dumps, no final dump, no file created when
+    one is missing, and FLUSHDB only clears memory - the seed file stays
+    pristine.
+    """
     if is_memory_mode(db_path):
         log.info("in-memory mode: no sqlite file, no snapshots")
+        data = Data()
+        return None, data, Commands(data)
+
+    if not save and not os.path.exists(db_path):
+        log.info("no-save mode: no existing snapshot at %s, starting empty", db_path)
         data = Data()
         return None, data, Commands(data)
 
@@ -74,7 +88,10 @@ def build_runtime(db_path):
             log.info("restored %d keys", len(data))
 
     handler = Commands(data)
-    handler.persistence = db
+    if save:
+        handler.persistence = db
+    else:
+        log.info("no-save mode: loading %s, snapshots disabled", db_path)
     return db, data, handler
 
 
@@ -157,6 +174,17 @@ def build_parser():
         help="seconds between sqlite snapshots (default: %(default)s)",
     )
     parser.add_argument(
+        "--no-save",
+        action="store_false",
+        dest="save",
+        default=True,
+        help=(
+            "never write snapshots (redis 'save \"\"'): an existing --db "
+            "file is still loaded at boot, but nothing is written back "
+            "and FLUSHDB only clears memory"
+        ),
+    )
+    parser.add_argument(
         "--no-uvloop",
         action="store_true",
         help="disable uvloop for the asyncio backend (ignored by trio)",
@@ -183,6 +211,7 @@ def _parse(argv):
         db_path=args.db_path,
         dump_interval=args.dump_interval,
         no_uvloop=args.no_uvloop,
+        save=args.save,
     )
 
 

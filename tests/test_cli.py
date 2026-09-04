@@ -80,6 +80,15 @@ def test_cli_memory_db():
     assert config.db_path == ":memory:"
 
 
+def test_cli_no_save_flag():
+    assert cli._parse([]).save is True
+    config = cli._parse(["--no-save"])
+    assert config.save is False
+    # orthogonal to the store choice: :memory: + --no-save is fine
+    config = cli._parse(["--db", ":memory:", "--no-save"])
+    assert config.db_path == ":memory:" and config.save is False
+
+
 def test_prepare_socket_path_removes_stale_file():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "kagni.sock")

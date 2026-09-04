@@ -634,6 +634,44 @@ def test_memory_mode_runtime():
     assert handler_.GET(b"k") == protocolBuilder(b"v")
 
 
+def test_no_save_mode_runtime():
+    """--no-save: an existing snapshot is loaded at boot but never written
+    back (redis' save ""), and a missing file is not created at all."""
+    import os
+    import tempfile
+
+    from kagni import cli
+    from kagni.db import DB
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "seed.sqlite")
+
+        # seed a snapshot the way a previous save-mode run would leave it
+        seed = DB(path)
+        d = Data()
+        d[b"seed"] = b"yes"
+        seed.dump(d)
+
+        db_, data_, handler_ = cli.build_runtime(path, save=False)
+        assert db_ is not None  # opened for the restore
+        assert handler_.persistence is None  # FLUSHDB only clears memory
+        assert handler_.GET(b"seed") == protocolBuilder(b"yes")
+        handler_.SET(b"new", b"value")
+        # nothing was written back
+        assert set(DB(path).load()) == {b"seed"}
+
+        # missing file + --no-save: start empty, create nothing on disk
+        missing = os.path.join(tmp, "never.sqlite")
+        db_, data_, handler_ = cli.build_runtime(missing, save=False)
+        assert db_ is None
+        assert handler_.GET(b"seed") == protocolBuilder(Response.NIL)
+        assert not os.path.exists(missing)
+
+        # sanity: save mode still creates the target file when missing
+        db_, data_, handler_ = cli.build_runtime(missing, save=True)
+        assert db_ is not None and os.path.exists(missing)
+
+
 def test_db_snapshot_replace_semantics():
     """The snapshot backend must behave identically on apsw and on the
     stdlib sqlite3 fallback."""
