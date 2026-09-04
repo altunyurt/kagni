@@ -96,11 +96,12 @@ def _parse_message(buf, pos):
             return None
         return line, npos
 
-    # inline command, e.g. "PING\r\n" (redis also accepts those)
+    # inline command, e.g. "PING\r\n" (redis also accepts those); runs of
+    # whitespace separate the tokens
     line, npos = _read_line(buf, pos)
     if line is None:
         return None
-    return [token for token in line.split(b" ") if token], npos
+    return line.split(), npos
 
 
 def _parse_array(buf, pos):
@@ -146,6 +147,11 @@ def _parse_bulk(buf, pos):
     return bytes(buf[npos : npos + length]), npos + length + 2
 
 
+# bytes that start a RESP-framed message; anything else starts an inline
+# command line ("PING\r\n", "SET key value\r\n")
+_RESP_MARKERS = frozenset(b"*$:+-")
+
+
 class RESPReader:
     """Incremental RESP parser — one instance per connection.
 
@@ -157,9 +163,10 @@ class RESPReader:
 
     Engines:
     - ``"hiredis"`` (default when hiredis is installed): C-speed parsing.
-      hiredis deliberately does not accept redis *inline* commands
-      (``PING\r\n``) — real clients always use the multi-bulk form — while
-      the pure engine keeps full inline support.
+      hiredis itself rejects redis *inline* commands (``PING\r\n``), which
+      redis-benchmark's PING_INLINE test and telnet users send, so this
+      class intercepts inline command lines at message boundaries before
+      they reach hiredis (see ``_feed_hiredis``).
     - ``"python"``: pure-python parser, always available.  It also applies
       a buffer cap (mirroring redis' proto-max-bulk-len) against a peer
       that announces a giant payload and never delivers it.
@@ -183,6 +190,10 @@ class RESPReader:
         self._engine = engine
         self._buffer = bytearray()
         self._reader = hiredis.Reader() if engine == "hiredis" else None
+        # inline interception state (hiredis engine only): once a RESP
+        # framed message has been handed to hiredis it owns the stream
+        # (it may hold a partial frame internally)
+        self._engaged = False
 
     @property
     def engine(self):
@@ -194,21 +205,48 @@ class RESPReader:
         return self._feed_python(data)
 
     def _feed_hiredis(self, data):
+        messages = []
+
+        if not self._engaged:
+            # hiredis rejects redis *inline* commands ("PING\r\n", used by
+            # redis-benchmark's PING_INLINE and telnet), so while the
+            # connection is still at a message boundary we parse inline
+            # command lines ourselves and only hand RESP-framed data to
+            # hiredis.
+            self._buffer.extend(data)
+            if len(self._buffer) > self.MAX_BUFFER:
+                raise ProtocolError("request exceeds maximum allowed size")
+
+            while self._buffer:
+                if self._buffer[0] in _RESP_MARKERS:
+                    # a framed message starts here: hiredis owns the
+                    # stream from now on (it may buffer a partial frame)
+                    self._engaged = True
+                    data = bytes(self._buffer)
+                    self._buffer.clear()
+                    break
+
+                end = self._buffer.find(SYM_CRLF)
+                if end == -1:
+                    return messages  # incomplete inline line: wait for more
+                # split like redis does: runs of whitespace separate tokens
+                tokens = bytes(self._buffer[:end]).split()
+                del self._buffer[: end + 2]
+                messages.append(tokens)
+            else:
+                data = b""
+
         try:
-            self._reader.feed(data)
+            if data:
+                self._reader.feed(data)
+            while True:
+                message = self._reader.gets()
+                if message is False:  # hiredis: no complete message buffered
+                    return messages
+                # None is a legitimate parsed value (null bulk / null array)
+                messages.append(message)
         except hiredis.HiredisError as exc:
             raise ProtocolError(str(exc))
-
-        messages = []
-        while True:
-            try:
-                message = self._reader.gets()
-            except hiredis.HiredisError as exc:
-                raise ProtocolError(str(exc))
-            if message is False:  # hiredis: no complete message buffered
-                return messages
-            # None is a legitimate parsed value (null bulk / null array)
-            messages.append(message)
 
     def _feed_python(self, data):
         self._buffer.extend(data)

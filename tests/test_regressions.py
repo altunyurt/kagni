@@ -299,6 +299,32 @@ def test_resp_reader_bulk_terminator_strictness():
             assert reader.feed(wire) == [[b"xxx"]]
 
 
+def test_resp_reader_inline_commands():
+    """redis-benchmark's PING_INLINE test and telnet users send commands
+    without RESP framing (e.g. ``PING\r\n``) — both engines must accept
+    them at message boundaries."""
+    for reader in _readers():
+        assert reader.feed(b"PING\r\n") == [[b"PING"]], reader.engine
+        assert reader.feed(b"PING\r\nSET foo bar\r\nPING\r\n") == [
+            [b"PING"],
+            [b"SET", b"foo", b"bar"],
+            [b"PING"],
+        ], reader.engine
+        # fragmented inline command
+        assert reader.feed(b"PIN") == [], reader.engine
+        assert reader.feed(b"G\r\n") == [[b"PING"]], reader.engine
+
+
+def test_resp_reader_inline_then_framed():
+    for reader in _readers():
+        wire = b"PING\r\n*1\r\n$4\r\nPING\r\n"
+        assert reader.feed(wire) == [[b"PING"], [b"PING"]], reader.engine
+
+
+def test_protocol_parser_one_shot_inline():
+    assert protocolParser(b"PING\r\n") == [b"PING"]
+
+
 def test_resp_reader_parse_variants():
     wire = (
         b":42\r\n"
