@@ -1,6 +1,7 @@
 from collections.abc import MutableMapping
 from math import ceil
 from time import monotonic_ns as monotonic_ns_time
+from time import time_ns as wall_clock_ns
 
 __all__ = ["Data"]
 
@@ -86,6 +87,23 @@ class Data(MutableMapping):
         return len(self._storage)
 
     # ----------------------------------------------------------------- writes
+    def set(self, key, value, wall_deadline_ns=None, keep_ttl=False):
+        """Store a value like redis SET.
+
+        wall_deadline_ns: absolute wall-clock deadline (``time.time_ns()``
+        epoch) for EX/PX/EXAT/PXAT style expiries; keep_ttl: preserve the
+        existing live TTL instead of clearing it.
+        """
+        now = monotonic_ns_time()
+        entry = self._storage.get(key)
+        if keep_ttl and entry is not None and self._live(entry, now):
+            expires_at = entry["expires_at"]
+        elif wall_deadline_ns is not None:
+            expires_at = now + (wall_deadline_ns - wall_clock_ns())
+        else:
+            expires_at = None
+        self._storage[key] = {"value": value, "expires_at": expires_at}
+
     def __setitem__(self, key, val, expire_secs: int = None):
         # TODO: add type checking for the data
         expires_at = None

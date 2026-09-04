@@ -672,6 +672,102 @@ def test_no_save_mode_runtime():
         assert db_ is not None and os.path.exists(missing)
 
 
+def test_set_option_validation():
+    c = _commands()
+    # syntax errors mirror redis parseExtendedStringArgumentsOrReply
+    for options in (
+        (b"NX", b"XX"), (b"XX", b"NX"), (b"EX", b"10", b"PX", b"10"),
+        (b"PX", b"10", b"EX", b"10"), (b"EX", b"10", b"KEEPTTL"),
+        (b"KEEPTTL", b"EX", b"10"), (b"EX",), (b"PX",), (b"BOGUS",),
+        (b"PERSIST",),
+    ):
+        _expect_error(lambda: c.SET(b"k", b"v", *options))
+    # duplicate flags are tolerated by redis (last one wins)
+    assert c.SET(b"k", b"v", b"GET", b"GET") in (protocolBuilder(Response.NIL), protocolBuilder(b"v"))
+    # GETEX: KEEPTTL and NX are SET-only
+    _expect_error(lambda: c.GETEX(b"k", b"KEEPTTL"))
+    _expect_error(lambda: c.GETEX(b"k", b"NX"))
+    _expect_error(lambda: c.GETEX(b"k", b"EX"))  # option without a value
+
+    # expire-time errors carry the command name
+    err = _expect_error(lambda: c.SET(b"k", b"v", b"EX", b"0"))
+    assert err.message == "invalid expire time in 'set' command", err.message
+    _expect_error(lambda: c.SET(b"k", b"v", b"PX", b"-5"))
+    _expect_error(lambda: c.SET(b"k", b"v", b"EX", b"x"))  # NOT_INT
+    err = _expect_error(lambda: c.SETEX(b"k", b"0", b"v"))
+    assert err.message == "invalid expire time in 'setex' command", err.message
+    err = _expect_error(lambda: c.PSETEX(b"k", b"-1", b"v"))
+    assert err.message == "invalid expire time in 'psetex' command", err.message
+
+
+def test_getex_expiry_validation_order():
+    c = _commands()
+    # the TTL value is validated after the key lookup (redis behaviour):
+    # a missing key replies nil even for an invalid expiry
+    assert c.GETEX(b"missing", b"EX", b"0") == protocolBuilder(Response.NIL)
+    c.SET(b"k", b"v")
+    err = _expect_error(lambda: c.GETEX(b"k", b"EX", b"0"))
+    assert err.message == "invalid expire time in 'getex' command", err.message
+
+
+def test_set_get_and_ttl_edges():
+    c = _commands()
+    # NX failure leaves value AND ttl untouched
+    c.SET(b"k", b"v", b"EX", b"100")
+    assert c.SET(b"k", b"blocked", b"NX") == protocolBuilder(Response.NIL)
+    assert c.GET(b"k") == protocolBuilder(b"v")
+    assert c.TTL(b"k") == b":100\r\n"
+    # XX on a logically expired key behaves like missing
+    c2 = _commands()
+    c2.SET(b"k", b"v", b"EXAT", b"1")  # past deadline: logically gone
+    assert c2.SET(b"k", b"v2", b"XX") == protocolBuilder(Response.NIL)
+    assert c2.SETNX(b"k", b"v3") == protocolBuilder(1)
+    assert c2.EXISTS(b"k") == protocolBuilder(1)
+    # KEEPTTL ignores a dead TTL
+    c3 = _commands()
+    c3.SET(b"k", b"v", b"EXAT", b"1")
+    c3.SET(b"k", b"v2", b"KEEPTTL")
+    assert c3.TTL(b"k") == protocolBuilder(-1)
+    # EXAT/PXAT in the future set a working TTL
+    import time as _wall
+
+    c4 = _commands()
+    c4.SET(b"k", b"v", b"EXAT", str(int(_wall.time()) + 3600).encode())
+    assert c4.TTL(b"k") == b":3600\r\n"
+
+
+def test_new_string_commands_wrongtype():
+    c = _commands()
+    c.RPUSH(b"lst", b"a")
+    _expect_error(lambda: c.GETDEL(b"lst"), "WRONGTYPE")
+    _expect_error(lambda: c.GETEX(b"lst"), "WRONGTYPE")
+    _expect_error(lambda: c.SET(b"lst", b"x", b"GET"), "WRONGTYPE")
+    # kind-agnostic commands do not raise
+    c.HSET(b"h", b"f", b"v")
+    assert c.EXISTS(b"h", b"lst") == protocolBuilder(2)
+    assert c.TOUCH(b"h", b"lst") == protocolBuilder(2)
+    assert c.SETNX(b"h", b"x") == protocolBuilder(0)  # exists -> no overwrite
+
+
+def test_msetnx_and_exists_expiry():
+    c = _commands()
+    c.SET(b"k", b"v")
+    c.EXPIRE(b"k", b"-1")
+    # expired keys count as missing for MSETNX / EXISTS / SET NX
+    assert c.MSETNX(b"k", b"v2", b"j", b"1") == protocolBuilder(1)
+    assert c.GET(b"k") == protocolBuilder(b"v2")
+    c2 = _commands()
+    c2.SET(b"k", b"v")
+    c2.EXPIRE(b"k", b"-1")
+    assert c2.EXISTS(b"k") == protocolBuilder(0)
+    assert c2.TOUCH(b"k") == protocolBuilder(0)
+    # DBSIZE sweeps expired keys
+    c3 = _commands()
+    c3.SET(b"a", b"1")
+    c3.SET(b"b", b"2", b"EXAT", b"1")
+    assert c3.DBSIZE() == protocolBuilder(1)
+
+
 def test_db_snapshot_replace_semantics():
     """The snapshot backend must behave identically on apsw and on the
     stdlib sqlite3 fallback."""

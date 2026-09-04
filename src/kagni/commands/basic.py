@@ -1,6 +1,7 @@
 from typing import List
 import fnmatch
 import re
+import time as _wall
 
 from kagni.constants import Error, Errors, Response, SimpleString
 from kagni.data import Data
@@ -60,6 +61,90 @@ TYPE_NAMES = {
 }
 
 
+def _expire_time_error(command):
+    """redis: 'invalid expire time in <command> command' (per-command name)."""
+    return Error("ERR", "invalid expire time in '%s' command" % command)
+
+
+def _parse_extended_options(command, options):
+    """Parse the SET/GETEX option list, mirroring t_string.c
+    parseExtendedStringArgumentsOrReply: NX/XX/GET (SET only),
+    KEEPTTL (SET only), PERSIST (GETEX only) and EX/PX/EXAT/PXAT with
+    their value.  Duplicates of the same flag/unit are tolerated (last
+    one wins), conflicting combinations raise a syntax error.
+
+    Returns ``(flags, unit, raw_value)`` where flags is a set of bytes
+    names.
+    """
+    flags = set()
+    unit = None
+    raw = None
+    is_set = command == "set"
+    j = 0
+    while j < len(options):
+        opt = options[j].upper()
+        has_next = j + 1 < len(options)
+        if opt == b"NX" and is_set and b"XX" not in flags:
+            flags.add(b"NX")
+        elif opt == b"XX" and is_set and b"NX" not in flags:
+            flags.add(b"XX")
+        elif opt == b"GET" and is_set:
+            flags.add(b"GET")
+        elif (
+            opt == b"KEEPTTL"
+            and is_set
+            and b"PERSIST" not in flags
+            and unit is None
+        ):
+            flags.add(b"KEEPTTL")
+        elif (
+            opt == b"PERSIST"
+            and not is_set
+            and b"KEEPTTL" not in flags
+            and unit is None
+        ):
+            flags.add(b"PERSIST")
+        elif (
+            opt in (b"EX", b"PX", b"EXAT", b"PXAT")
+            and b"KEEPTTL" not in flags
+            and b"PERSIST" not in flags
+            and (unit is None or unit == opt)
+            and has_next
+        ):
+            unit = opt
+            j += 1
+            raw = options[j]
+        else:
+            raise Errors.SYNTAX
+        j += 1
+    return flags, unit, raw
+
+
+def _expire_wall_deadline(command, unit, raw):
+    """Absolute wall-clock deadline (ns) for an EX/PX/EXAT/PXAT value,
+    mirroring getExpireMillisecondsOrReply.  Raises NOT_INT for
+    non-integers and the per-command expire-time error for non-positive
+    or overflowing values."""
+    try:
+        value = int(raw, 10)
+    except (ValueError, TypeError):
+        raise Errors.NOT_INT
+    if value < -(2 ** 63) or value > 2 ** 63 - 1:
+        raise Errors.NOT_INT
+    if value <= 0:
+        raise _expire_time_error(command)
+    if unit in (b"EX", b"EXAT") and value > (2 ** 63 - 1) // 1000:
+        raise _expire_time_error(command)
+    if unit == b"EX":
+        value = value * 1000 + _wall.time_ns() // 1_000_000  # s -> ms from now
+    elif unit == b"PX":
+        value += _wall.time_ns() // 1_000_000  # ms from now
+    elif unit == b"EXAT":
+        value *= 1000  # absolute seconds -> milliseconds
+    # PXAT stays as-is (absolute milliseconds)
+    return value * 1_000_000  # wall-clock nanoseconds
+
+
 class CommandSetMixin:
     @command_decorator(b"PING")
     def PING(self, message: bytes = None) -> (Response.PONG, bytes):
@@ -107,16 +192,86 @@ class CommandSetMixin:
 
     # ------------------------------------------------------------------ core
     @command_decorator(b"SET")
-    def SET(self, key: bytes, val: bytes) -> Response.OK:
+    def SET(self, key: bytes, val: bytes, *options: bytes):
+        """SET key value [NX|XX] [GET] [EX s|PX ms|EXAT ts|PXAT ts|KEEPTTL].
+
+        Returns +OK, or the previous value with GET, or NIL when NX/XX
+        blocks the write.
+        """
+        flags, unit, raw = _parse_extended_options("set", options)
+        deadline = _expire_wall_deadline("set", unit, raw) if unit else None
+
+        old = self._string(key) if b"GET" in flags else None
+        found = key in self.data
+        if (b"NX" in flags and found) or (b"XX" in flags and not found):
+            # blocked by NX/XX: with GET reply the old value (redis does
+            # so even when the write is skipped), otherwise nil
+            return old if old is not None else Response.NIL
+
+        self.data.set(
+            key,
+            val,
+            wall_deadline_ns=deadline,
+            keep_ttl=b"KEEPTTL" in flags,
+        )
         if len(val) > MAX_STRING_SIZE:
             raise Errors.STRING_OVERFLOW
-        self.data[key] = val
+        # with GET the reply is always the old value (or nil when the key
+        # did not exist), otherwise +OK
+        return old if old is not None else (Response.NIL if b"GET" in flags else Response.OK)
+
+    @command_decorator(b"SETNX")
+    def SETNX(self, key: bytes, val: bytes) -> int:
+        if key in self.data:
+            return 0
+        self.data.set(key, val)
+        return 1
+
+    @command_decorator(b"SETEX")
+    def SETEX(self, key: bytes, secs: int, val: bytes) -> Response.OK:
+        deadline = _expire_wall_deadline("setex", b"EX", str(secs).encode())
+        self.data.set(key, val, wall_deadline_ns=deadline)
+        return Response.OK
+
+    @command_decorator(b"PSETEX")
+    def PSETEX(self, key: bytes, ms: int, val: bytes) -> Response.OK:
+        deadline = _expire_wall_deadline("psetex", b"PX", str(ms).encode())
+        self.data.set(key, val, wall_deadline_ns=deadline)
         return Response.OK
 
     @command_decorator(b"GET")
     def GET(self, key: bytes) -> (bytes, Response.NIL):
         val = self._string(key)
         return Response.NIL if val is None else val
+
+    @command_decorator(b"GETDEL")
+    def GETDEL(self, key: bytes) -> (bytes, Response.NIL):
+        val = self._string(key)
+        if val is None:
+            return Response.NIL
+        self.data.remove(key)
+        return val
+
+    @command_decorator(b"GETEX")
+    def GETEX(self, key: bytes, *options: bytes):
+        """GETEX key [PERSIST|EX s|PX ms|EXAT ts|PXAT ts].  Returns the
+        value and updates its TTL; NIL for a missing key."""
+        flags, unit, raw = _parse_extended_options("getex", options)
+
+        val = self._string(key)
+        if val is None:
+            return Response.NIL
+
+        if b"PERSIST" in flags:
+            self.data.persist(key)
+        elif unit:
+            deadline = _expire_wall_deadline("getex", unit, raw)
+            if deadline <= _wall.time_ns():
+                # EXAT/PXAT in the past: redis replies the value and deletes
+                self.data.remove(key)
+            else:
+                self.data.set(key, val, wall_deadline_ns=deadline)
+        return val
 
     @command_decorator(b"GETSET")
     def GETSET(self, key: bytes, val: bytes) -> (bytes, Response.NIL):
@@ -138,6 +293,16 @@ class CommandSetMixin:
             raise Errors.arity("mset")
         self.data.update(zip(args[::2], args[1::2]))
         return Response.OK
+
+    @command_decorator(b"MSETNX")
+    def MSETNX(self, *args: bytes) -> int:
+        if len(args) < 2 or len(args) % 2:
+            raise Errors.arity("msetnx")
+        keys = args[::2]
+        if any(key in self.data for key in keys):
+            return 0  # nothing is set when at least one key exists
+        self.data.update(zip(keys, args[1::2]))
+        return 1
 
     @command_decorator(b"DEL")
     def DEL(self, *keys) -> int:
@@ -165,6 +330,23 @@ class CommandSetMixin:
         )
         rgx = re.compile(re_pattern.encode("utf-8", "surrogateescape"))
         return [key for key in self.data if rgx.match(key)]
+
+    # ------------------------------------------------------------- keyspace
+    @command_decorator(b"EXISTS")
+    def EXISTS(self, *keys) -> int:
+        if not keys:
+            raise Errors.arity("exists")
+        return sum(1 for key in keys if key in self.data)
+
+    @command_decorator(b"TOUCH")
+    def TOUCH(self, *keys) -> int:
+        if not keys:
+            raise Errors.arity("touch")
+        return sum(1 for key in keys if key in self.data)
+
+    @command_decorator(b"DBSIZE")
+    def DBSIZE(self) -> int:
+        return len(self.data)
 
     # ----------------------------------------------------------- counters
     def _bump(self, key, by):
