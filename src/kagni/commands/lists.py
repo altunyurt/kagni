@@ -234,3 +234,118 @@ class CommandSetMixin:
                 lst.insert(i + offset, val)
                 return len(lst)
         return -1
+
+    # ------------------------------------------------------------- moves
+    def _list_side(self, where):
+        """True for LEFT, False for RIGHT; redis parses these before any
+        key lookup, so a bad value is a syntax error even for missing keys."""
+        side = where.upper()
+        if side == b"LEFT":
+            return True
+        if side == b"RIGHT":
+            return False
+        raise Errors.SYNTAX
+
+    def _move(self, source, destination, from_left, to_left):
+        src = self._list(source)
+        if src is None:
+            return Response.NIL
+        if not src:  # defensive: stored lists are never empty
+            self.data.remove(source)
+            return Response.NIL
+
+        # destination is type-checked before anything is popped; when the
+        # source and destination are the same key the element is rotated
+        # inside the list
+        dst = src if destination == source else self._list(destination)
+
+        value = src.popleft() if from_left else src.pop()
+        if dst is None:
+            dst = deque()
+            self.data[destination] = dst
+        if to_left:
+            dst.appendleft(value)
+        else:
+            dst.append(value)
+
+        if dst is not src and not src:
+            self.data.remove(source)
+        return value
+
+    @command_decorator(b"LMOVE")
+    def LMOVE(
+        self,
+        source: bytes,
+        destination: bytes,
+        wherefrom: bytes,
+        whereto: bytes,
+    ) -> (bytes, Response.NIL):
+        from_left = self._list_side(wherefrom)
+        to_left = self._list_side(whereto)
+        return self._move(source, destination, from_left, to_left)
+
+    @command_decorator(b"RPOPLPUSH")
+    def RPOPLPUSH(self, source: bytes, destination: bytes) -> (bytes, Response.NIL):
+        return self._move(source, destination, from_left=False, to_left=True)
+
+    # --------------------------------------------------------------- lpos
+    @command_decorator(b"LPOS")
+    def LPOS(self, key: bytes, element: bytes, *options: bytes):
+        rank = 1
+        count = -1  # -1: COUNT option not given
+        maxlen = 0  # 0: scan the whole list
+
+        # parse options before any key lookup, like redis (RANK/COUNT/MAXLEN)
+        j = 0
+        while j < len(options):
+            option = options[j].upper()
+            if option not in (b"RANK", b"COUNT", b"MAXLEN") or j + 1 >= len(options):
+                raise Errors.SYNTAX
+            try:
+                value = int(options[j + 1], 10)
+            except (ValueError, TypeError):
+                raise Errors.NOT_INT
+            if value < -(2 ** 63) or value > 2 ** 63 - 1:
+                raise Errors.NOT_INT
+            j += 2
+
+            if option == b"RANK":
+                if value == 0:
+                    raise Errors.RANK_ZERO
+                rank = value
+            elif option == b"COUNT":
+                if value < 0:
+                    raise Errors.COUNT_NEG
+                count = value
+            else:  # MAXLEN
+                if value < 0:
+                    raise Errors.MAXLEN_NEG
+                maxlen = value
+
+        lst = self._list(key)
+        if lst is None:
+            return Response.NIL if count == -1 else []
+
+        length = len(lst)
+        from_tail = rank < 0
+        if from_tail:
+            rank = -rank
+
+        matches = 0
+        found = []
+        for index, item in enumerate(lst if not from_tail else reversed(lst)):
+            if maxlen and index >= maxlen:
+                break
+            if item != element:
+                continue
+            matches += 1
+            if matches < rank:
+                continue
+            match_index = length - 1 - index if from_tail else index
+            if count == -1:
+                return match_index
+            found.append(match_index)
+            if count and len(found) >= count:
+                break
+
+        return Response.NIL if count == -1 else found

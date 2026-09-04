@@ -1,6 +1,7 @@
 from .constants import SYM_CRLF
 from .constants import Error
 from .constants import Response
+from .constants import SimpleString
 
 try:
     import hiredis  # optional C accelerator; falls back to the pure parser
@@ -35,6 +36,9 @@ def _resp_dumps(value):
 
     if isinstance(value, Response):
         return responses_dict[value]
+
+    if isinstance(value, SimpleString):
+        return [b"+" + value.value.encode()]
 
     if isinstance(value, Error):
         line = b"-" + value.class_.encode()

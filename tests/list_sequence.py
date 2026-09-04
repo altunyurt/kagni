@@ -505,4 +505,220 @@ test_sequence = [
         "returns": 3,
         "expects": lambda cs: list(cs.data[b"k"]) == [b"a", b"X", b"b"],
     },
+    ##
+    # LMOVE
+    ##
+    {
+        "name": "Check LMOVE on a missing source",
+        "command": "LMOVE",
+        "args": [b"src", b"dst", b"LEFT", b"LEFT"],
+        "returns": Response.NIL,
+        "expects": lambda cs: b"dst" not in cs.data,
+    },
+    {
+        "name": "Check LMOVE LEFT LEFT moves the head and replies with it",
+        "command": "LMOVE",
+        "args": [b"src", b"dst", b"LEFT", b"LEFT"],
+        "depends": [{"command": "RPUSH", "args": [b"src", b"a", b"b"], "returns": 2}],
+        "returns": b"a",
+        "expects": lambda cs: list(cs.data[b"src"]) == [b"b"]
+        and list(cs.data[b"dst"]) == [b"a"],
+    },
+    {
+        "name": "Check LMOVE RIGHT RIGHT moves the tail to the destination tail",
+        "command": "LMOVE",
+        "args": [b"src", b"dst", b"RIGHT", b"RIGHT"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"src", b"a", b"b", b"c"], "returns": 3},
+            {"command": "RPUSH", "args": [b"dst", b"x"], "returns": 1},
+        ],
+        "returns": b"c",
+        "expects": lambda cs: list(cs.data[b"src"]) == [b"a", b"b"]
+        and list(cs.data[b"dst"]) == [b"x", b"c"],
+    },
+    {
+        "name": "Check LMOVE RIGHT LEFT pushes onto the destination head",
+        "command": "LMOVE",
+        "args": [b"src", b"dst", b"RIGHT", b"LEFT"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"src", b"a", b"b"], "returns": 2},
+            {"command": "RPUSH", "args": [b"dst", b"x"], "returns": 1},
+        ],
+        "returns": b"b",
+        "expects": lambda cs: list(cs.data[b"src"]) == [b"a"]
+        and list(cs.data[b"dst"]) == [b"b", b"x"],
+    },
+    {
+        "name": "Check LMOVE is case-insensitive on the sides",
+        "command": "LMOVE",
+        "args": [b"src", b"dst", b"left", b"RIGHT"],
+        "depends": [{"command": "RPUSH", "args": [b"src", b"a"], "returns": 1}],
+        "returns": b"a",
+    },
+    {
+        "name": "Check LMOVE moving the last element deletes the source",
+        "command": "LMOVE",
+        "args": [b"src", b"dst", b"LEFT", b"LEFT"],
+        "depends": [{"command": "RPUSH", "args": [b"src", b"a"], "returns": 1}],
+        "returns": b"a",
+        "expects": lambda cs: b"src" not in cs.data
+        and list(cs.data[b"dst"]) == [b"a"],
+    },
+    {
+        "name": "Check LMOVE rotates when source and destination are the same",
+        "command": "LMOVE",
+        "args": [b"k", b"k", b"LEFT", b"RIGHT"],
+        "depends": [{"command": "RPUSH", "args": [b"k", b"a", b"b", b"c"], "returns": 3}],
+        "returns": b"a",
+        "expects": lambda cs: list(cs.data[b"k"]) == [b"b", b"c", b"a"],
+    },
+    {
+        "name": "Check LMOVE RIGHT LEFT on the same key rotates the other way",
+        "command": "LMOVE",
+        "args": [b"k", b"k", b"RIGHT", b"LEFT"],
+        "depends": [{"command": "RPUSH", "args": [b"k", b"a", b"b", b"c"], "returns": 3}],
+        "returns": b"c",
+        "expects": lambda cs: list(cs.data[b"k"]) == [b"c", b"a", b"b"],
+    },
+    ##
+    # RPOPLPUSH
+    ##
+    {
+        "name": "Check RPOPLPUSH on a missing source",
+        "command": "RPOPLPUSH",
+        "args": [b"src", b"dst"],
+        "returns": Response.NIL,
+    },
+    {
+        "name": "Check RPOPLPUSH moves the tail to the destination head",
+        "command": "RPOPLPUSH",
+        "args": [b"src", b"dst"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"src", b"a", b"b", b"c"], "returns": 3},
+            {"command": "RPUSH", "args": [b"dst", b"x"], "returns": 1},
+        ],
+        "returns": b"c",
+        "expects": lambda cs: list(cs.data[b"src"]) == [b"a", b"b"]
+        and list(cs.data[b"dst"]) == [b"c", b"x"],
+    },
+    {
+        "name": "Check RPOPLPUSH rotates when source and destination match",
+        "command": "RPOPLPUSH",
+        "args": [b"k", b"k"],
+        "depends": [{"command": "RPUSH", "args": [b"k", b"a", b"b", b"c"], "returns": 3}],
+        "returns": b"c",
+        "expects": lambda cs: list(cs.data[b"k"]) == [b"c", b"a", b"b"],
+    },
+    ##
+    # LPOS
+    ##
+    {
+        "name": "Check LPOS on a missing key",
+        "command": "LPOS",
+        "args": [b"k", b"a"],
+        "returns": Response.NIL,
+    },
+    {
+        "name": "Check LPOS on a missing key with COUNT returns an empty array",
+        "command": "LPOS",
+        "args": [b"k", b"a", b"COUNT", b"0"],
+        "returns": [],
+    },
+    {
+        "name": "Check LPOS finds the first match",
+        "command": "LPOS",
+        "args": [b"k", b"a"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": 0,
+    },
+    {
+        "name": "Check LPOS with no match",
+        "command": "LPOS",
+        "args": [b"k", b"zz"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": Response.NIL,
+    },
+    {
+        "name": "Check LPOS with RANK finds the nth match",
+        "command": "LPOS",
+        "args": [b"k", b"a", b"RANK", b"2"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": 2,
+    },
+    {
+        "name": "Check LPOS with negative RANK searches from the tail",
+        "command": "LPOS",
+        "args": [b"k", b"a", b"RANK", b"-1"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": 4,
+    },
+    {
+        "name": "Check LPOS with negative RANK -2 returns the second from the tail",
+        "command": "LPOS",
+        "args": [b"k", b"a", b"RANK", b"-2"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": 2,
+    },
+    {
+        "name": "Check LPOS with COUNT returns every match",
+        "command": "LPOS",
+        "args": [b"k", b"a", b"COUNT", b"0"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": [0, 2, 4],
+    },
+    {
+        "name": "Check LPOS with COUNT limits the number of matches",
+        "command": "LPOS",
+        "args": [b"k", b"a", b"COUNT", b"2"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": [0, 2],
+    },
+    {
+        "name": "Check LPOS combines RANK and COUNT",
+        "command": "LPOS",
+        "args": [b"k", b"a", b"RANK", b"2", b"COUNT", b"2"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": [2, 4],
+    },
+    {
+        "name": "Check LPOS MAXLEN limits the scan",
+        "command": "LPOS",
+        "args": [b"k", b"c", b"MAXLEN", b"3"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": Response.NIL,
+    },
+    {
+        "name": "Check LPOS MAXLEN still finds matches inside the limit",
+        "command": "LPOS",
+        "args": [b"k", b"c", b"MAXLEN", b"4"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k", b"a", b"b", b"a", b"c", b"a"], "returns": 6}
+        ],
+        "returns": 3,
+    },
+    {
+        "name": "Check LPOS is case-insensitive on option names",
+        "command": "LPOS",
+        "args": [b"k", b"a", b"count", b"1"],
+        "depends": [{"command": "RPUSH", "args": [b"k", b"a", b"a"], "returns": 2}],
+        "returns": [0],
+    },
 ]

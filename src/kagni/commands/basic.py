@@ -2,9 +2,17 @@ from typing import List
 import fnmatch
 import re
 
-from kagni.constants import Error, Errors, Response
+from kagni.constants import Error, Errors, Response, SimpleString
 from kagni.data import Data
-from .common import KIND_STRING, expect_kind, kind_of
+from .common import (
+    KIND_BITMAP,
+    KIND_HASH,
+    KIND_LIST,
+    KIND_SET,
+    KIND_STRING,
+    expect_kind,
+    kind_of,
+)
 from .decorator import command_decorator
 
 # redis-style 64-bit signed integer range for INCR/DECR
@@ -41,6 +49,17 @@ def _config_get(pattern: bytes) -> list:
 __all__ = ["CommandSetMixin"]
 
 
+# redis type names for TYPE; bitmaps live in strings in redis, so a
+# pyroaring-backed key reports "string" like a SETBIT-created one would
+TYPE_NAMES = {
+    KIND_STRING: "string",
+    KIND_LIST: "list",
+    KIND_HASH: "hash",
+    KIND_SET: "set",
+    KIND_BITMAP: "string",
+}
+
+
 class CommandSetMixin:
     @command_decorator(b"PING")
     def PING(self, message: bytes = None) -> (Response.PONG, bytes):
@@ -49,6 +68,13 @@ class CommandSetMixin:
     @command_decorator(b"COMMAND")
     def COMMAND(self, *args) -> Response.OK:
         return Response.OK
+
+    @command_decorator(b"TYPE")
+    def TYPE(self, key: bytes) -> SimpleString:
+        val = self.data.get(key)
+        if val is None:
+            return SimpleString("none")
+        return SimpleString(TYPE_NAMES.get(kind_of(val), "none"))
 
     @command_decorator(b"CONFIG")
     def CONFIG(self, *args: bytes) -> list:

@@ -13,6 +13,14 @@ class Response(Enum):
     NIL_ARRAY = auto()  # RESP null array (*-1), distinct from an empty array
 
 
+class SimpleString:
+    """A RESP simple-string reply ("+..."), for results like TYPE's
+    "none"/"string"/"list" that are not part of the fixed Response set."""
+
+    def __init__(self, value: str):
+        self.value = value
+
+
 class Error(Exception):
     def __init__(self, class_, msg=""):
         self.class_ = class_
@@ -30,6 +38,13 @@ class Errors:
     SYNTAX = Error("ERR", "syntax error")
     NOKEY = Error("ERR", "no such key")
     INDEX_RANGE = Error("ERR", "index out of range")
+    RANK_ZERO = Error(
+        "ERR",
+        "RANK can't be zero: use 1 to start from the first match, 2 from "
+        "the second ... or use negative to start from the end of the list",
+    )
+    COUNT_NEG = Error("ERR", "COUNT can't be negative")
+    MAXLEN_NEG = Error("ERR", "MAXLEN can't be negative")
     BIT_OFFSET = Error("ERR", "bit offset is not an integer or out of range")
     BIT_VALUE = Error("ERR", "bit is not an integer or out of range")
     BIT_ARG = Error("ERR", "The bit argument must be 1 or 0.")

@@ -1,4 +1,4 @@
-from kagni.constants import Response
+from kagni.constants import Response, SimpleString
 
 __all__ = ["test_sequence"]
 
@@ -361,5 +361,37 @@ test_sequence = [
             ],
             "returns": Response.OK,
             "expects": lambda cmds: len(cmds.data) == 0,
-        }
+        },
+
+    ##
+    # TYPE
+    ##
+    {
+        "name": "Check TYPE on a missing key",
+        "command": "TYPE",
+        "args": [b"k"],
+        "returns": SimpleString("none"),
+    },
+    {
+        "name": "Check TYPE on a string key",
+        "command": "TYPE",
+        "args": [b"k"],
+        "depends": [{"command": "SET", "args": [b"k", b"v"], "returns": Response.OK}],
+        "returns": SimpleString("string"),
+    },
+    {
+        "name": "Check TYPE on a hash key",
+        "command": "TYPE",
+        "args": [b"k"],
+        "depends": [{"command": "HSET", "args": [b"k", b"f", b"v"], "returns": 1}],
+        "returns": SimpleString("hash"),
+    },
+    {
+        "name": "Check TYPE on a set key",
+        "command": "TYPE",
+        "args": [b"k"],
+        "depends": [{"command": "SADD", "args": [b"k", b"m"], "returns": 1}],
+        "returns": SimpleString("set"),
+    },
 ]
+

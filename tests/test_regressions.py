@@ -11,7 +11,7 @@
 """
 
 from kagni.commands import Commands
-from kagni.constants import Error, Response
+from kagni.constants import Error, Response, SimpleString
 from kagni.data import Data
 from kagni.resp import RESPReader, ProtocolError, protocolBuilder, protocolParser
 
@@ -506,6 +506,68 @@ def test_dispatch_list_arity():
     assert b"wrong number of arguments" in c.dispatch([b"RPUSH", b"k"])
     assert b"wrong number of arguments" in c.dispatch([b"LPOP", b"k", b"1", b"2"])
     assert b"wrong number of arguments" in c.dispatch([b"LRANGE", b"k", b"0"])
+
+
+def test_lpos_option_validation():
+    c = _commands()
+    c.RPUSH(b"k", b"a", b"b", b"a")
+    # option parsing precedes key lookup: errors fire even on missing keys
+    err = _expect_error(lambda: c.LPOS(b"missing", b"a", b"RANK"))
+    assert err.message == "syntax error", err.message
+    _expect_error(lambda: c.LPOS(b"missing", b"a", b"BOGUS", b"1"))
+    err = _expect_error(lambda: c.LPOS(b"k", b"a", b"RANK", b"0"))
+    assert err.message.startswith("RANK can't be zero"), err.message
+    err = _expect_error(lambda: c.LPOS(b"k", b"a", b"COUNT", b"-1"))
+    assert err.message == "COUNT can't be negative", err.message
+    err = _expect_error(lambda: c.LPOS(b"k", b"a", b"MAXLEN", b"-1"))
+    assert err.message == "MAXLEN can't be negative", err.message
+    err = _expect_error(lambda: c.LPOS(b"k", b"a", b"RANK", b"x"))
+    assert err.message == "value is not an integer or out of range", err.message
+
+
+def test_lmove_validation_and_wrongtype():
+    c = _commands()
+    # where-arguments are parsed before any key lookup
+    err = _expect_error(lambda: c.LMOVE(b"missing", b"dst", b"UP", b"LEFT"))
+    assert err.message == "syntax error", err.message
+    _expect_error(lambda: c.LMOVE(b"missing", b"dst", b"LEFT", b"SIDEWAYS"))
+
+    # wrongtype matrix: source and destination are both checked
+    c2 = _commands()
+    c2.SET(b"s", b"abc")
+    _expect_error(lambda: c2.LMOVE(b"s", b"dst", b"LEFT", b"LEFT"), "WRONGTYPE")
+    c2.RPUSH(b"src", b"a")
+    _expect_error(lambda: c2.LMOVE(b"src", b"s", b"LEFT", b"LEFT"), "WRONGTYPE")
+    _expect_error(lambda: c2.RPOPLPUSH(b"s", b"dst"), "WRONGTYPE")
+    # the destination type is checked before the source is popped
+    c3 = _commands()
+    c3.RPUSH(b"src", b"a", b"b")
+    c3.HSET(b"h", b"f", b"v")
+    _expect_error(lambda: c3.LMOVE(b"src", b"h", b"LEFT", b"LEFT"), "WRONGTYPE")
+    assert list(c3.data[b"src"]) == [b"a", b"b"]
+
+
+def test_type_command():
+    c = _commands()
+    assert c.TYPE(b"missing") == protocolBuilder(SimpleString("none"))
+    assert protocolBuilder(SimpleString("none")) == b"+none\r\n"
+
+    c2 = _commands()
+    c2.RPUSH(b"lst", b"a")
+    assert c2.TYPE(b"lst") == protocolBuilder(SimpleString("list"))
+    c2.SET(b"s", b"v")
+    assert c2.TYPE(b"s") == protocolBuilder(SimpleString("string"))
+    c2.EXPIRE(b"s", b"-1")
+    assert c2.TYPE(b"s") == protocolBuilder(SimpleString("none"))
+
+    # bitmaps report "string", like redis (no bitmap type exists there)
+    try:
+        import pyroaring  # noqa: F401
+    except ImportError:
+        return
+    c3 = _commands()
+    c3.SETBIT(b"bm", b"3", b"1")
+    assert c3.TYPE(b"bm") == protocolBuilder(SimpleString("string"))
 
 
 def test_db_snapshot_replace_semantics():

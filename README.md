@@ -87,3 +87,7 @@ I've implemented the following commands up to now:
 - Linsert
 - Lpop
 - Rpop
+- Lmove
+- Rpoplpush
+- Lpos
+- Type
