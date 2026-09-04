@@ -12,12 +12,62 @@ Requires Python 3.13+.
 
     kagni --loop asyncio|trio [--host HOST] [--port PORT] [--socket PATH]
           [--db PATH] [--dump-interval SECS] [--no-save] [--no-uvloop]
+          [--daemon] [--pidfile PATH] [--logfile PATH]
 
 Defaults: `asyncio` loop (uvloop when installed), `localhost:6380`, sqlite file `kagni.sqlite`, snapshot every 20 s.
 
 - TCP and a unix domain socket are additive: `--socket PATH` also listens there, `--port 0` disables TCP.
 - `--db :memory:` runs purely in memory — no file, no restore, no snapshots.
 - `--no-save` loads an existing snapshot at boot but never writes back (redis `save ""`); a missing file is not created.
+
+## Services and daemon mode
+
+`--daemon` detaches kagni into the background (POSIX): the command prints
+the child pid and returns. Logs go to `--logfile` (or nowhere);
+`--pidfile PATH` writes the process id and removes it on graceful
+shutdown. `SIGTERM` shuts the server down gracefully, final snapshot
+included — useful for service managers.
+
+    kagni --daemon --pidfile /var/run/kagni.pid --logfile /var/log/kagni.log \
+          --host 127.0.0.1 --port 6380 --db /var/lib/kagni/kagni.sqlite
+
+Use absolute paths for `--db`/`--logfile`/`--pidfile` in daemon mode.
+
+### systemd
+
+systemd manages the daemonizing itself, so run kagni in the foreground
+(no `--daemon`) and let the journal capture the logs:
+
+    # /etc/systemd/system/kagni.service
+    [Unit]
+    Description=Kagni redis-like data store
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=kagni
+    ExecStart=/usr/local/bin/kagni --host 127.0.0.1 --port 6380 \
+        --db /var/lib/kagni/kagni.sqlite
+    Restart=on-failure
+
+    [Install]
+    WantedBy=multi-user.target
+
+    systemctl daemon-reload
+    systemctl enable --now kagni
+
+### supervisord
+
+Supervisord also expects foreground processes:
+
+    # /etc/supervisor/conf.d/kagni.conf
+    [program:kagni]
+    command=/usr/local/bin/kagni --host 127.0.0.1 --port 6380 --db /var/lib/kagni/kagni.sqlite
+    user=kagni
+    autostart=true
+    autorestart=true
+    redirect_stderr=true
+    stdout_logfile=/var/log/kagni.log
 
 ## Storage
 

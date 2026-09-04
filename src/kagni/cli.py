@@ -13,6 +13,7 @@ import argparse
 import importlib
 import logging
 import os
+import signal
 import socket
 
 from kagni import __version__
@@ -32,7 +33,8 @@ class Config:
     """Everything the server backends need to know about this run."""
 
     def __init__(self, loop, host, port, socket_path, db_path,
-                 dump_interval, no_uvloop, save=True):
+                 dump_interval, no_uvloop, save=True, daemon=False,
+                 pidfile=None, logfile=None):
         self.loop = loop
         self.host = host
         self.port = port
@@ -41,6 +43,9 @@ class Config:
         self.dump_interval = dump_interval
         self.no_uvloop = no_uvloop
         self.save = save
+        self.daemon = daemon
+        self.pidfile = pidfile
+        self.logfile = logfile
 
 
 # ------------------------------------------------------------ shared runtime
@@ -195,6 +200,24 @@ def build_parser():
         action="store_true",
         help="disable uvloop for the asyncio backend (ignored by trio)",
     )
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="detach and run in the background (POSIX); the command returns "
+        "immediately - use --logfile to keep the logs",
+    )
+    parser.add_argument(
+        "--pidfile",
+        metavar="PATH",
+        default=None,
+        help="write the process id to PATH; removed on graceful shutdown",
+    )
+    parser.add_argument(
+        "--logfile",
+        metavar="PATH",
+        default=None,
+        help="write logs to PATH instead of stderr",
+    )
     return parser
 
 
@@ -218,19 +241,73 @@ def _parse(argv):
         dump_interval=args.dump_interval,
         no_uvloop=args.no_uvloop,
         save=args.save,
+        daemon=args.daemon,
+        pidfile=args.pidfile,
+        logfile=args.logfile,
     )
+
+
+# ------------------------------------------------------- daemon plumbing
+def _daemonize():
+    """Detach from the controlling terminal: fork, let the parent exit,
+    start a new session.  Returns only in the daemon child; stdin/stdout/
+    stderr are redirected to /dev/null (use --logfile to keep logs)."""
+    if not hasattr(os, "fork"):
+        log.error("--daemon requires a POSIX platform (os.fork)")
+        raise SystemExit(1)
+
+    pid = os.fork()
+    if pid > 0:
+        print("kagni started as pid %d" % pid, flush=True)
+        os._exit(0)
+
+    os.setsid()
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(devnull, fd)
+    if devnull > 2:
+        os.close(devnull)
+    log.info("daemonized (pid %d)", os.getpid())
+
+
+def _write_pidfile(path):
+    try:
+        with open(path, "w") as fh:
+            fh.write("%d\n" % os.getpid())
+    except OSError:
+        log.exception("could not write pidfile %s", path)
+
+
+def _remove_pidfile(path):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.warning("could not remove pidfile %s", path, exc_info=True)
+
+
+def _sigterm_handler(signum, frame):
+    """Services stop daemons with SIGTERM; route it through the same
+    graceful path as Ctrl-C so the final snapshot still happens."""
+    raise KeyboardInterrupt
 
 
 def main(argv=None):
-    """Entry point (console script / kagni.py)."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
-    )
+    """Entry point (console script / python -m kagni)."""
+    config = _parse(argv)  # usage errors exit before any fork
 
-    try:
-        config = _parse(argv)
-    except SystemExit:
-        raise
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        filename=config.logfile,
+    )
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
+    if config.daemon:
+        _daemonize()
+    if config.pidfile:
+        _write_pidfile(config.pidfile)
 
     backend = "server_trio" if config.loop == "trio" else "server_asyncio"
     engine = importlib.import_module("kagni." + backend)
@@ -239,7 +316,7 @@ def main(argv=None):
     except KeyboardInterrupt:
         log.info("User requested shutdown.")
     except BaseExceptionGroup as group:
-        # trio delivers SIGINT as a group wrapping KeyboardInterrupt
+        # trio delivers SIGINT/SIGTERM as a group wrapping KeyboardInterrupt
         if any(isinstance(exc, KeyboardInterrupt) for exc in group.exceptions):
             log.info("User requested shutdown.")
         else:
@@ -248,6 +325,9 @@ def main(argv=None):
     except Exception:
         log.exception("server exited with an error")
         return 1
+    finally:
+        if config.pidfile:
+            _remove_pidfile(config.pidfile)
     return 0
 
 

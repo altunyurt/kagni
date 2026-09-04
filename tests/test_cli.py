@@ -16,6 +16,10 @@ def test_cli_defaults():
     assert config.dump_interval == 20
     assert config.no_uvloop is False
     assert config.db_path
+    assert config.save is True
+    assert config.daemon is False
+    assert config.pidfile is None
+    assert config.logfile is None
 
 
 def test_cli_validation_errors():
@@ -87,6 +91,15 @@ def test_cli_no_save_flag():
     # orthogonal to the store choice: :memory: + --no-save is fine
     config = cli._parse(["--db", ":memory:", "--no-save"])
     assert config.db_path == ":memory:" and config.save is False
+
+
+def test_cli_daemon_flags():
+    config = cli._parse(
+        ["--daemon", "--pidfile", "/tmp/kagni.pid", "--logfile", "/tmp/kagni.log"]
+    )
+    assert config.daemon is True
+    assert config.pidfile == "/tmp/kagni.pid"
+    assert config.logfile == "/tmp/kagni.log"
 
 
 def test_prepare_socket_path_removes_stale_file():
