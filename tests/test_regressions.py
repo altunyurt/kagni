@@ -606,6 +606,34 @@ def test_lmpop_wrongtype():
     assert c3.LMPOP(b"2", b"k1", b"s", b"LEFT") == protocolBuilder([b"k1", [b"x"]])
 
 
+def test_memory_mode_runtime():
+    """--db :memory: must special-case to a real in-memory mode: sqlite
+    memory databases live per connection, so dump/load can never
+    round-trip, and running the snapshot machinery against them would
+    just be busy-work.  build_runtime therefore returns no DB at all,
+    which tells the engines to skip the dumper and final dump."""
+    from kagni import cli
+    from kagni.db import DB
+
+    assert cli.is_memory_mode(":memory:")
+    assert cli.is_memory_mode(None)
+    assert not cli.is_memory_mode("kagni.sqlite")
+
+    # prove the per-connection ephemerality that motivates the mode
+    db = DB(":memory:")
+    d = Data()
+    d[b"a"] = b"1"
+    db.dump(d)
+    assert db.load() == {}
+
+    db_, data_, handler_ = cli.build_runtime(":memory:")
+    assert db_ is None
+    assert data_ is not None
+    assert handler_.persistence is None  # FLUSHDB only clears memory
+    handler_.SET(b"k", b"v")
+    assert handler_.GET(b"k") == protocolBuilder(b"v")
+
+
 def test_db_snapshot_replace_semantics():
     """The snapshot backend must behave identically on apsw and on the
     stdlib sqlite3 fallback."""

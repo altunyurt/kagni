@@ -75,6 +75,11 @@ def test_cli_full_flags():
     assert config.no_uvloop is True
 
 
+def test_cli_memory_db():
+    config = cli._parse(["--db", ":memory:"])
+    assert config.db_path == ":memory:"
+
+
 def test_prepare_socket_path_removes_stale_file():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "kagni.sock")

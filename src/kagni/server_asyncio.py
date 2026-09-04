@@ -65,6 +65,7 @@ async def amain(config):
     db, data, handler = build_runtime(config.db_path)
     loop = asyncio.get_running_loop()
     factory = partial(RedisServerProtocol, handler)
+    store = "in-memory" if db is None else config.db_path
 
     servers = []
     created_socket = None
@@ -72,17 +73,15 @@ async def amain(config):
     try:
         if config.port > 0:
             servers.append(await loop.create_server(factory, config.host, config.port))
-            log.info(
-                "kagni listening on %s:%s (db: %s)",
-                config.host, config.port, config.db_path,
-            )
+            log.info("kagni listening on %s:%s (db: %s)", config.host, config.port, store)
         if config.socket_path is not None:
             path = prepare_socket_path(config.socket_path)
             servers.append(await loop.create_unix_server(factory, path=path))
             created_socket = path
-            log.info("kagni listening on %s (db: %s)", path, config.db_path)
+            log.info("kagni listening on %s (db: %s)", path, store)
 
-        dumper_task = asyncio.create_task(dumper(db, data, config.dump_interval))
+        if db is not None:
+            dumper_task = asyncio.create_task(dumper(db, data, config.dump_interval))
         await asyncio.gather(*(server.serve_forever() for server in servers))
     finally:
         for server in servers:
@@ -97,10 +96,11 @@ async def amain(config):
                 await dumper_task
             except asyncio.CancelledError:
                 pass
-        try:
-            await loop.run_in_executor(None, db.dump, data)
-        except Exception:
-            log.exception("final database dump failed")
+        if db is not None:
+            try:
+                await loop.run_in_executor(None, db.dump, data)
+            except Exception:
+                log.exception("final database dump failed")
         if created_socket is not None:
             remove_socket_file(created_socket)
 

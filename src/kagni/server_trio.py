@@ -53,16 +53,14 @@ async def dumper(db, data, interval):
 
 async def amain(config):
     db, data, handler = build_runtime(config.db_path)
+    store = "in-memory" if db is None else config.db_path
 
     listeners = []
     created_socket = None
     try:
         if config.port > 0:
             listeners += await trio.open_tcp_listeners(config.port, host=config.host)
-            log.info(
-                "kagni listening on %s:%s (db: %s)",
-                config.host, config.port, config.db_path,
-            )
+            log.info("kagni listening on %s:%s (db: %s)", config.host, config.port, store)
         if config.socket_path is not None:
             path = prepare_socket_path(config.socket_path)
             sock = trio.socket.socket(trio.socket.AF_UNIX, trio.socket.SOCK_STREAM)
@@ -70,22 +68,24 @@ async def amain(config):
             sock.listen(16)
             listeners.append(trio.SocketListener(sock))
             created_socket = path
-            log.info("kagni listening on %s (db: %s)", path, config.db_path)
+            log.info("kagni listening on %s (db: %s)", path, store)
 
         async with trio.open_nursery() as nursery:
-            nursery.start_soon(dumper, db, data, config.dump_interval)
+            if db is not None:
+                nursery.start_soon(dumper, db, data, config.dump_interval)
             nursery.start_soon(
                 trio.serve_listeners,
                 partial(protocol_handler, command_handler=handler),
                 listeners,
             )
     finally:
-        # best-effort final snapshot on shutdown (serve_listeners closed
-        # the listeners when the nursery was cancelled)
-        try:
-            db.dump(data)
-        except Exception:
-            log.exception("final database dump failed")
+        if db is not None:
+            # best-effort final snapshot on shutdown (serve_listeners closed
+            # the listeners when the nursery was cancelled)
+            try:
+                db.dump(data)
+            except Exception:
+                log.exception("final database dump failed")
         if created_socket is not None:
             remove_socket_file(created_socket)
 

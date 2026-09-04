@@ -13,6 +13,7 @@ Performance will get better hopefully :)
 TCP (default `localhost:6380`) and a unix domain socket (`--socket`) are
 additive, like redis: `--port 0` disables TCP for socket-only setups.
 `uv run kagni` is equivalent to `./kagni.py`.
+`--db :memory:` runs purely in memory: no sqlite file, no snapshots.
 
 ### Details
 

@@ -42,9 +42,25 @@ class Config:
 
 
 # ------------------------------------------------------------ shared runtime
+MEMORY_DB = ":memory:"
+
+
+def is_memory_mode(db_path):
+    """True when the store should live purely in RAM: no sqlite file, no
+    snapshot dumps (sqlite's :memory: would be ephemeral per connection
+    anyway, so skipping the machinery entirely is the honest mode)."""
+    return db_path is None or db_path == MEMORY_DB
+
+
 def build_runtime(db_path):
-    """Create the DB, restore the snapshot into memory and wire up the
-    command handler.  Shared by both backends."""
+    """Create the store and wire up the command handler.  Shared by both
+    backends.  Returns ``(db, data, handler)``; *db* is None in memory
+    mode, which tells the engines to skip the dumper and final dump."""
+    if is_memory_mode(db_path):
+        log.info("in-memory mode: no sqlite file, no snapshots")
+        data = Data()
+        return None, data, Commands(data)
+
     db = DB(db_path)
     data = Data()
     try:
@@ -129,7 +145,10 @@ def build_parser():
         "--db",
         dest="db_path",
         default=DEFAULT_DB_PATH,
-        help="sqlite snapshot file (default: %(default)s, or $KAGNI_DB)",
+        help=(
+            "sqlite snapshot file (default: %(default)s, or $KAGNI_DB); "
+            "use ':memory:' for a purely in-memory store with no snapshots"
+        ),
     )
     parser.add_argument(
         "--dump-interval",
