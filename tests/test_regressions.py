@@ -570,6 +570,42 @@ def test_type_command():
     assert c3.TYPE(b"bm") == protocolBuilder(SimpleString("string"))
 
 
+def test_lmpop_validation():
+    c = _commands()
+    err = _expect_error(lambda: c.LMPOP(b"0", b"k", b"LEFT"))
+    assert err.message == "numkeys should be greater than 0", err.message
+    _expect_error(lambda: c.LMPOP(b"-1", b"k", b"LEFT"))
+    err = _expect_error(lambda: c.LMPOP(b"1", b"k", b"LEFT", b"COUNT", b"0"))
+    assert err.message == "count should be greater than 0", err.message
+    err = _expect_error(lambda: c.LMPOP(b"1", b"k", b"LEFT", b"COUNT", b"-2"))
+    assert err.message == "count should be greater than 0", err.message
+    err = _expect_error(lambda: c.LMPOP(b"1", b"k", b"LEFT", b"RANK", b"1"))
+    assert err.message == "syntax error", err.message
+    # missing LEFT/RIGHT entirely, and key-count mismatches, are syntax errors
+    _expect_error(lambda: c.LMPOP(b"1", b"k"))
+    _expect_error(lambda: c.LMPOP(b"2", b"k", b"LEFT"))  # declares 2 keys, gives 1
+    _expect_error(lambda: c.LMPOP(b"1", b"k", b"LEFT", b"extra"))
+    # non-integer numkeys / count
+    err = _expect_error(lambda: c.LMPOP(b"x", b"k", b"LEFT"))
+    assert err.message == "value is not an integer or out of range", err.message
+
+
+def test_lmpop_wrongtype():
+    c = _commands()
+    c.SET(b"s", b"abc")
+    _expect_error(lambda: c.LMPOP(b"2", b"s", b"k2", b"LEFT"), "WRONGTYPE")
+    # a wrongtype key later in the list is only an error if the scan
+    # reaches it (earlier keys are missing/empty)
+    c2 = _commands()
+    c2.SET(b"s", b"abc")
+    _expect_error(lambda: c2.LMPOP(b"2", b"k1", b"s", b"LEFT"), "WRONGTYPE")
+    c3 = _commands()
+    c3.SET(b"s", b"abc")
+    c3.RPUSH(b"k1", b"x")
+    # k1 has data, so the wrongtype k2 is never examined
+    assert c3.LMPOP(b"2", b"k1", b"s", b"LEFT") == protocolBuilder([b"k1", [b"x"]])
+
+
 def test_db_snapshot_replace_semantics():
     """The snapshot backend must behave identically on apsw and on the
     stdlib sqlite3 fallback."""

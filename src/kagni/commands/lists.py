@@ -21,7 +21,7 @@ from collections import deque
 from itertools import islice
 from typing import List
 
-from kagni.constants import Errors, Response
+from kagni.constants import Error, Errors, Response
 from .common import KIND_LIST, expect_kind
 from .decorator import command_decorator
 
@@ -287,6 +287,62 @@ class CommandSetMixin:
     @command_decorator(b"RPOPLPUSH")
     def RPOPLPUSH(self, source: bytes, destination: bytes) -> (bytes, Response.NIL):
         return self._move(source, destination, from_left=False, to_left=True)
+
+    @command_decorator(b"LMPOP")
+    def LMPOP(self, numkeys: int, *rest: bytes):
+        """LMPOP numkeys key [key ...] LEFT|RIGHT [COUNT count]
+
+        Pops from the first non-empty list among the keys, checking them
+        in the order given; replies [key, [elements...]] or a null array.
+        Arg parsing mirrors redis' lmpopGenericCommand: the LEFT|RIGHT
+        position is derived from the declared numkeys, so key-count
+        mismatches and stray options are syntax errors; numkeys/count
+        must be >= 1 with redis' exact error messages.
+        """
+        if numkeys > 2 ** 63 - 1:
+            raise Errors.NOT_INT
+        if numkeys < 1:
+            raise Error("ERR", "numkeys should be greater than 0")
+        if numkeys + 1 > len(rest):
+            raise Errors.SYNTAX
+
+        keys = rest[:numkeys]
+        from_left = self._list_side(rest[numkeys])
+
+        count = 1
+        j = numkeys + 1
+        while j < len(rest):
+            option = rest[j].upper()
+            if option == b"COUNT" and j + 1 < len(rest):
+                try:
+                    count = int(rest[j + 1], 10)
+                except (ValueError, TypeError):
+                    raise Errors.NOT_INT
+                if count > 2 ** 63 - 1:
+                    raise Errors.NOT_INT
+                if count < 1:
+                    raise Error("ERR", "count should be greater than 0")
+                j += 2
+                if j < len(rest):
+                    raise Errors.SYNTAX  # COUNT may only appear once
+            else:
+                raise Errors.SYNTAX
+
+        for key in keys:
+            lst = self._list(key)
+            if lst is None:
+                continue
+            if not lst:  # defensive: stored lists are never empty
+                self.data.remove(key)
+                continue
+
+            popfn = lst.popleft if from_left else lst.pop
+            n = min(count, len(lst))
+            popped = [popfn() for _ in range(n)]
+            self._drop_empty(key, lst)
+            return [key, popped]
+
+        return Response.NIL_ARRAY
 
     # --------------------------------------------------------------- lpos
     @command_decorator(b"LPOS")

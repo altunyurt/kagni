@@ -90,4 +90,5 @@ I've implemented the following commands up to now:
 - Lmove
 - Rpoplpush
 - Lpos
+- Lmpop
 - Type

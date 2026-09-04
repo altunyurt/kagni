@@ -721,4 +721,72 @@ test_sequence = [
         "depends": [{"command": "RPUSH", "args": [b"k", b"a", b"a"], "returns": 2}],
         "returns": [0],
     },
+
+    ##
+    # LMPOP
+    ##
+    {
+        "name": "Check LMPOP on empty keys returns a null array",
+        "command": "LMPOP",
+        "args": [b"2", b"k1", b"k2", b"LEFT"],
+        "returns": Response.NIL_ARRAY,
+    },
+    {
+        "name": "Check LMPOP pops a single element by default",
+        "command": "LMPOP",
+        "args": [b"1", b"k", b"LEFT"],
+        "depends": [{"command": "RPUSH", "args": [b"k", b"a", b"b", b"c"], "returns": 3}],
+        "returns": [b"k", [b"a"]],
+        "expects": lambda cs: list(cs.data[b"k"]) == [b"b", b"c"],
+    },
+    {
+        "name": "Check LMPOP with COUNT pops several elements",
+        "command": "LMPOP",
+        "args": [b"1", b"k", b"LEFT", b"COUNT", b"2"],
+        "depends": [{"command": "RPUSH", "args": [b"k", b"a", b"b", b"c"], "returns": 3}],
+        "returns": [b"k", [b"a", b"b"]],
+        "expects": lambda cs: list(cs.data[b"k"]) == [b"c"],
+    },
+    {
+        "name": "Check LMPOP RIGHT pops from the tail",
+        "command": "LMPOP",
+        "args": [b"1", b"k", b"RIGHT"],
+        "depends": [{"command": "RPUSH", "args": [b"k", b"a", b"b"], "returns": 2}],
+        "returns": [b"k", [b"b"]],
+    },
+    {
+        "name": "Check LMPOP skips empty keys and uses the first non-empty one",
+        "command": "LMPOP",
+        "args": [b"3", b"k1", b"k2", b"k3", b"LEFT"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k3", b"x", b"y"], "returns": 2}
+        ],
+        "returns": [b"k3", [b"x"]],
+        "expects": lambda cs: list(cs.data[b"k3"]) == [b"y"],
+    },
+    {
+        "name": "Check LMPOP pops the whole list when COUNT exceeds its length",
+        "command": "LMPOP",
+        "args": [b"1", b"k", b"RIGHT", b"COUNT", b"10"],
+        "depends": [{"command": "RPUSH", "args": [b"k", b"a", b"b"], "returns": 2}],
+        "returns": [b"k", [b"b", b"a"]],
+        "expects": lambda cs: b"k" not in cs.data,
+    },
+    {
+        "name": "Check LMPOP is case-insensitive on the side and options",
+        "command": "LMPOP",
+        "args": [b"1", b"k", b"left", b"count", b"1"],
+        "depends": [{"command": "RPUSH", "args": [b"k", b"a"], "returns": 1}],
+        "returns": [b"k", [b"a"]],
+    },
+    {
+        "name": "Check LMPOP replies with the key of the list it popped from",
+        "command": "LMPOP",
+        "args": [b"2", b"k1", b"k2", b"LEFT"],
+        "depends": [
+            {"command": "RPUSH", "args": [b"k1", b"a", b"b"], "returns": 2},
+            {"command": "RPUSH", "args": [b"k2", b"x"], "returns": 1},
+        ],
+        "returns": [b"k1", [b"a"]],
+    },
 ]
