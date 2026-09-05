@@ -20,7 +20,7 @@ It is a real RESP server that lives comfortably inside Python workflows:
   inspectable with standard tooling.
 
 It is not a Redis replacement where throughput or feature breadth matter:
-expect a modest single-process op rate, a ~65-command subset, and no
+expect a modest single-process op rate, a ~77-command subset, and no
 blocking commands, replication, transactions or pub/sub.
 
 ## Running
