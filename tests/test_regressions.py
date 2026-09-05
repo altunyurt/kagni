@@ -818,6 +818,74 @@ def test_incrbyfloat_validation():
     assert err.message == "increment would produce NaN or Infinity", err.message
 
 
+def test_transactions_multi_exec_discard():
+    from kagni.commands import Session
+
+    c = _commands()
+
+    # basic flow: queue, +QUEUED replies, atomic-looking EXEC array
+    s = Session()
+    assert c.dispatch([b"MULTI"], s) == b"+OK\r\n"
+    assert c.dispatch([b"SET", b"a", b"1"], s) == b"+QUEUED\r\n"
+    assert c.dispatch([b"INCR", b"a"], s) == b"+QUEUED\r\n"
+    assert c.dispatch([b"GET", b"a"], s) == b"+QUEUED\r\n"
+    # queued commands see each other's effects (like redis)
+    assert c.dispatch([b"EXEC"], s) == b"*3\r\n+OK\r\n:2\r\n$1\r\n2\r\n"
+    # state is reset after EXEC
+    assert c.dispatch([b"EXEC"], s) == b"-ERR EXEC without MULTI\r\n"
+
+    # empty EXEC
+    s2 = Session()
+    c.dispatch([b"MULTI"], s2)
+    assert c.dispatch([b"EXEC"], s2) == b"*0\r\n"
+
+    # DISCARD drops the queue without executing
+    s3 = Session()
+    c.dispatch([b"MULTI"], s3)
+    c.dispatch([b"SET", b"x", b"1"], s3)
+    assert c.dispatch([b"DISCARD"], s3) == b"+OK\r\n"
+    assert c.dispatch([b"GET", b"x"], s3) == b"$-1\r\n"
+    assert c.dispatch([b"DISCARD"], s3) == b"-ERR DISCARD without MULTI\r\n"
+
+
+def test_transactions_queue_time_and_runtime_errors():
+    from kagni.commands import Session
+
+    c = _commands()
+
+    # nested MULTI
+    s = Session()
+    c.dispatch([b"MULTI"], s)
+    assert c.dispatch([b"MULTI"], s) == b"-ERR MULTI calls can not be nested\r\n"
+    # unknown commands and arity mistakes are answered immediately and
+    # are NOT queued; MULTI stays open
+    assert c.dispatch([b"FOOBAR"], s).startswith(b"-ERR unknown command")
+    assert c.dispatch([b"GET"], s).startswith(b"-ERR wrong number")
+    c.dispatch([b"SET", b"b", b"1"], s)
+    assert c.dispatch([b"EXEC"], s) == b"*1\r\n+OK\r\n"
+    assert c.dispatch([b"GET", b"b"], s) == b"$1\r\n1\r\n"
+
+    # runtime errors become inline -ERR entries inside the EXEC array
+    # while the remaining commands still run
+    s2 = Session()
+    c.dispatch([b"SET", b"bad", b"abc"], s2)
+    c.dispatch([b"MULTI"], s2)
+    c.dispatch([b"INCR", b"bad"], s2)
+    c.dispatch([b"SET", b"ok", b"1"], s2)
+    assert c.dispatch([b"EXEC"], s2) == (
+        b"*2\r\n-ERR value is not an integer or out of range\r\n+OK\r\n"
+    )
+    assert c.dispatch([b"GET", b"ok"], s2) == b"$1\r\n1\r\n"
+
+    # transactions are per-connection: another session is unaffected
+    s3, s4 = Session(), Session()
+    c.dispatch([b"MULTI"], s3)
+    c.dispatch([b"SET", b"iso", b"queued"], s3)
+    assert c.dispatch([b"GET", b"iso"], s4) == b"$-1\r\n"
+    c.dispatch([b"DISCARD"], s3)
+    assert c.dispatch([b"GET", b"iso"], s3) == b"$-1\r\n"
+
+
 def test_db_snapshot_replace_semantics():
     """The snapshot backend must behave identically on apsw and on the
     stdlib sqlite3 fallback."""

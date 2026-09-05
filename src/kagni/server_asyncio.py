@@ -16,6 +16,7 @@ from kagni.cli import (
     prepare_socket_path,
     remove_socket_file,
 )
+from kagni.commands import Session
 from kagni.resp import RESPReader, ProtocolError
 
 log = logging.getLogger("kagni.asyncio")
@@ -30,6 +31,7 @@ class RedisServerProtocol(asyncio.Protocol):
     def __init__(self, command_handler):
         self._handler = command_handler
         self._parser = RESPReader()
+        self._session = Session()  # per-connection MULTI/EXEC state
         self._transport = None
 
     def connection_made(self, transport):
@@ -40,7 +42,7 @@ class RedisServerProtocol(asyncio.Protocol):
             return
         try:
             for request in self._parser.feed(data):
-                reply = self._handler.dispatch(request)
+                reply = self._handler.dispatch(request, self._session)
                 if reply is not None:
                     self._transport.write(reply)
         except ProtocolError as exc:

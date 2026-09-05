@@ -20,7 +20,7 @@ It is a real RESP server that lives comfortably inside Python workflows:
   inspectable with standard tooling.
 
 It is not a Redis replacement where throughput or feature breadth matter:
-expect a modest single-process op rate, a ~77-command subset, and no
+expect a modest single-process op rate, a ~80-command subset, and no
 blocking commands, replication, transactions or pub/sub.
 
 ## Running
@@ -101,6 +101,6 @@ Supported commands, grouped by data type:
 
 | String | List | Set | Hash | Bitmap | Keys / admin |
 | --- | --- | --- | --- | --- | --- |
-| SET (NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL)<br>GET<br>GETSET<br>GETDEL<br>GETEX<br>SETNX<br>SETEX<br>PSETEX<br>MSET<br>MSETNX<br>MGET<br>APPEND<br>STRLEN<br>GETRANGE<br>SETRANGE<br>INCR<br>INCRBY<br>INCRBYFLOAT<br>DECR<br>DECRBY | LPUSH<br>RPUSH<br>LPUSHX<br>RPUSHX<br>LLEN<br>LINDEX<br>LSET<br>LRANGE<br>LTRIM<br>LREM<br>LINSERT<br>LPOP<br>RPOP<br>LMOVE<br>RPOPLPUSH<br>LPOS<br>LMPOP | SADD<br>SCARD<br>SMEMBERS<br>SISMEMBER<br>SREM<br>SPOP<br>SRANDMEMBER<br>SMOVE<br>SDIFF<br>SDIFFSTORE<br>SINTER<br>SINTERSTORE<br>SUNION<br>SUNIONSTORE | HSET<br>HGET<br>HEXISTS<br>HDEL<br>HGETALL | SETBIT<br>GETBIT<br>BITCOUNT<br>BITPOS<br>BITOP | PING<br>COMMAND<br>CONFIG<br>CLIENT<br>TYPE<br>DEL<br>EXPIRE<br>PERSIST<br>TTL<br>KEYS<br>SCAN<br>EXISTS<br>TOUCH<br>DBSIZE<br>FLUSHDB<br>FLUSHALL |
+| SET (NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL)<br>GET<br>GETSET<br>GETDEL<br>GETEX<br>SETNX<br>SETEX<br>PSETEX<br>MSET<br>MSETNX<br>MGET<br>APPEND<br>STRLEN<br>GETRANGE<br>SETRANGE<br>INCR<br>INCRBY<br>INCRBYFLOAT<br>DECR<br>DECRBY | LPUSH<br>RPUSH<br>LPUSHX<br>RPUSHX<br>LLEN<br>LINDEX<br>LSET<br>LRANGE<br>LTRIM<br>LREM<br>LINSERT<br>LPOP<br>RPOP<br>LMOVE<br>RPOPLPUSH<br>LPOS<br>LMPOP | SADD<br>SCARD<br>SMEMBERS<br>SISMEMBER<br>SREM<br>SPOP<br>SRANDMEMBER<br>SMOVE<br>SDIFF<br>SDIFFSTORE<br>SINTER<br>SINTERSTORE<br>SUNION<br>SUNIONSTORE | HSET<br>HGET<br>HEXISTS<br>HDEL<br>HGETALL | SETBIT<br>GETBIT<br>BITCOUNT<br>BITPOS<br>BITOP | PING<br>COMMAND<br>CONFIG<br>CLIENT<br>TYPE<br>DEL<br>EXPIRE<br>PERSIST<br>TTL<br>KEYS<br>SCAN<br>EXISTS<br>TOUCH<br>DBSIZE<br>MULTI<br>EXEC<br>DISCARD<br>FLUSHDB<br>FLUSHALL |
 
-Not implemented (yet): blocking commands (`BLPOP`/`BRPOP`/`BLMOVE`), sorted sets, streams, pub/sub and transactions.
+Not implemented (yet): blocking commands (`BLPOP`/`BRPOP`/`BLMOVE`), sorted sets, streams, pub/sub and `WATCH` (`MULTI`/`EXEC`/`DISCARD` are supported).

@@ -7,6 +7,7 @@ from functools import partial
 import trio
 
 from kagni.cli import build_runtime, prepare_socket_path, remove_socket_file
+from kagni.commands import Session
 from kagni.resp import RESPReader, ProtocolError
 
 log = logging.getLogger("kagni.trio")
@@ -16,6 +17,7 @@ async def protocol_handler(stream, command_handler=None):
     """Per-connection RESP handler with incremental framing (partial
     reads / pipelining / CRLF-safe bulk values)."""
     parser = RESPReader()
+    session = Session()  # per-connection MULTI/EXEC state
     try:
         while True:
             data = await stream.receive_some(65536)
@@ -23,7 +25,7 @@ async def protocol_handler(stream, command_handler=None):
                 return
 
             for request in parser.feed(data):
-                reply = command_handler.dispatch(request)
+                reply = command_handler.dispatch(request, session)
                 if reply is not None:
                     await stream.send_all(reply)
     except ProtocolError as exc:
