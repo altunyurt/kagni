@@ -104,3 +104,27 @@ Supported commands, grouped by data type:
 | SET (NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL)<br>GET<br>GETSET<br>GETDEL<br>GETEX<br>SETNX<br>SETEX<br>PSETEX<br>MSET<br>MSETNX<br>MGET<br>APPEND<br>STRLEN<br>GETRANGE<br>SETRANGE<br>INCR<br>INCRBY<br>INCRBYFLOAT<br>DECR<br>DECRBY | LPUSH<br>RPUSH<br>LPUSHX<br>RPUSHX<br>LLEN<br>LINDEX<br>LSET<br>LRANGE<br>LTRIM<br>LREM<br>LINSERT<br>LPOP<br>RPOP<br>LMOVE<br>RPOPLPUSH<br>LPOS<br>LMPOP | SADD<br>SCARD<br>SMEMBERS<br>SISMEMBER<br>SREM<br>SPOP<br>SRANDMEMBER<br>SMOVE<br>SDIFF<br>SDIFFSTORE<br>SINTER<br>SINTERSTORE<br>SUNION<br>SUNIONSTORE | HSET<br>HGET<br>HEXISTS<br>HDEL<br>HGETALL | SETBIT<br>GETBIT<br>BITCOUNT<br>BITPOS<br>BITOP | PING<br>COMMAND<br>CONFIG<br>CLIENT<br>TYPE<br>DEL<br>EXPIRE<br>PERSIST<br>TTL<br>KEYS<br>SCAN<br>EXISTS<br>TOUCH<br>DBSIZE<br>MULTI<br>EXEC<br>DISCARD<br>FLUSHDB<br>FLUSHALL |
 
 Not implemented (yet): blocking commands (`BLPOP`/`BRPOP`/`BLMOVE`), sorted sets, streams, pub/sub and `WATCH` (`MULTI`/`EXEC`/`DISCARD` are supported).
+
+## Testing & known gaps
+
+The test suite mirrors redis 7.2 semantics per command (happy paths, error
+matrices, wire shapes) plus an end-to-end battery over real sockets on
+both event loops and both listener types.  Known gaps, intentionally left
+open:
+
+- **No differential harness against a real redis** — messages and reply
+  shapes are mirrored from source by hand; a redis-py/RESP differential
+  runner would catch drift but needs a redis binary in CI.
+- **No parser fuzzing** — malformed input is spot-checked; a random-byte
+  fuzz loop asserting "only `-ERR Protocol error`, never a crash" is not
+  in the suite.
+- **The 512 MB string-size guards are not exercised** (allocating that
+  much in tests is not worth it); the guards are trivial bounds checks.
+- **`INCRBYFLOAT` runs on double precision** — redis uses 80-bit long
+  doubles and prints fixed-point; kagni prints the shortest round-trip
+  repr, so results agree for everyday decimals (`10.5`, `0.1+0.2`) but
+  may differ at extreme magnitudes (exponents, sub-1e-16 deltas).
+- **Interpreter coverage (3.11–3.13) is verified ad hoc**, not
+  reproducible in CI; the declared floor is 3.11.
+- **`WATCH`, pub/sub, blocking commands, sorted sets and streams are not
+  implemented** (see the command table), so they have no tests.

@@ -799,15 +799,27 @@ def test_client_subcommand_errors():
 
 def test_incrbyfloat_validation():
     c = _commands()
-    for bad in (b"abc", b"1e3", b"inf", b"nan", b"", b"--1", b"1.2.3"):
+    # invalid increments, mirroring redis string2ld: non-floats, nan,
+    # whitespace, partials, overflow/underflow ("inf"/exponents are valid
+    # parses and fail later only when the result is not finite)
+    for bad in (b"abc", b"nan", b"", b"--1", b"1.2.3", b"1e-9999",
+                b"1e9999", b" 1.5", b"1.5 ", b"1.5\xff"):
         err = _expect_error(lambda: c.INCRBYFLOAT(b"k", bad))
         assert err.message == "value is not a valid float", err.message
+    # literal inf parses, but the infinite result is rejected
+    err = _expect_error(lambda: c.INCRBYFLOAT(b"k", b"inf"))
+    assert err.message == "increment would produce NaN or Infinity", err.message
+    # exponents and signs are accepted like strtold
+    assert c.INCRBYFLOAT(b"k", b"1e3") == protocolBuilder(b"1000")
+    assert c.INCRBYFLOAT(b"k", b"1.5e1") == protocolBuilder(b"1015")
+    assert c.INCRBYFLOAT(b"k", b"+1") == protocolBuilder(b"1016")
+    assert c.INCRBYFLOAT(b"k", b"-.5") == protocolBuilder(b"1015.5")
     # a stored non-float value errors the same way
     c.SET(b"s", b"not-a-float")
     _expect_error(lambda: c.INCRBYFLOAT(b"s", b"1.5"))
-    # wrongtype
+    # type check happens before the increment is parsed (redis order)
     c.HSET(b"h", b"f", b"v")
-    _expect_error(lambda: c.INCRBYFLOAT(b"h", b"1"), "WRONGTYPE")
+    _expect_error(lambda: c.INCRBYFLOAT(b"h", b"not-a-float"), "WRONGTYPE")
     # overflow produces NaN/Infinity (increment as big as the stored max)
     import sys as _sys
 
@@ -816,6 +828,35 @@ def test_incrbyfloat_validation():
     c2.SET(b"big", huge)
     err = _expect_error(lambda: c2.INCRBYFLOAT(b"big", huge))
     assert err.message == "increment would produce NaN or Infinity", err.message
+
+
+def test_incrbyfloat_formatting_contract():
+    """Pins the formatter: shortest round-trip repr, no trailing '.0',
+    -0 normalised to 0, exponents allowed, stored strings re-parse."""
+    c = _commands()
+    for increment, expected in ((b"10.5", b"10.5"), (b"-10.5", b"-10.5"),
+                                (b"1e3", b"1000"), (b"-0.0", b"0")):
+        c.SET(b"f", b"0")  # fresh base for every case
+        assert c.INCRBYFLOAT(b"f", increment) == protocolBuilder(expected)
+        # the stored string must re-parse for the next operation
+        assert c.INCRBYFLOAT(b"f", b"0") == protocolBuilder(expected)
+    # subtracting back to exactly zero prints '0', not '-0'
+    c.SET(b"f", b"10.5")
+    assert c.INCRBYFLOAT(b"f", b"-10.5") == protocolBuilder(b"0")
+    # float precision case
+    c2 = _commands()
+    c2.SET(b"p", b"0.1")
+    assert c2.INCRBYFLOAT(b"p", b"0.2") == protocolBuilder(b"0.30000000000000004")
+    # large magnitudes use exponent notation (double repr); the stored
+    # value must still parse for a subsequent operation
+    c3 = _commands()
+    c3.SET(b"big", b"123456789012345678901234567890")
+    first = c3.INCRBYFLOAT(b"big", b"1")
+    assert protocolParser(first).startswith(b"1.2345678901234568e+29")
+    assert c3.INCRBYFLOAT(b"big", b"0") == first  # no-op roundtrip
+    # double precision at 1e29 is ~1e13, so subtract a visible amount
+    smaller = c3.INCRBYFLOAT(b"big", b"-1e22")
+    assert smaller != first and protocolParser(smaller).startswith(b"1.2345677")
 
 
 def test_transactions_multi_exec_discard():
@@ -884,6 +925,122 @@ def test_transactions_queue_time_and_runtime_errors():
     assert c.dispatch([b"GET", b"iso"], s4) == b"$-1\r\n"
     c.dispatch([b"DISCARD"], s3)
     assert c.dispatch([b"GET", b"iso"], s3) == b"$-1\r\n"
+
+
+def test_set_expiry_unit_and_edge_coverage():
+    import time as _wall
+
+    c = _commands()
+    # SET PX (milliseconds) - only EX/EXAT/PSETEX were covered before
+    c.SET(b"k", b"v", b"PX", b"50000")
+    assert c.TTL(b"k") == b":50\r\n"
+    # SET PXAT (absolute ms), future
+    c.SET(b"k", b"v", b"PXAT", str(int(_wall.time() * 1000) + 60000).encode())
+    ttl = protocolParser(c.TTL(b"k"))
+    assert 59 <= ttl <= 60, ttl
+    # past PXAT: +OK reply, key logically gone
+    assert c.SET(b"k", b"v", b"PXAT", b"1") == protocolBuilder(Response.OK)
+    assert c.GET(b"k") == protocolBuilder(Response.NIL)
+    # XX + GET on a missing key -> nil, key not created
+    c2 = _commands()
+    assert c2.SET(b"m", b"v", b"XX", b"GET") == protocolBuilder(Response.NIL)
+    assert b"m" not in c2.data
+    # NX on an existing wrong-type key -> NIL (not WRONGTYPE), hash intact
+    c3 = _commands()
+    c3.HSET(b"h", b"f", b"v")
+    assert c3.SET(b"h", b"x", b"NX") == protocolBuilder(Response.NIL)
+    assert c3.HGET(b"h", b"f") == protocolBuilder(b"v")
+    # SETEX/PSETEX replace any existing kind, like redis
+    c4 = _commands()
+    c4.RPUSH(b"l", b"a")
+    assert c4.SETEX(b"l", b"100", b"str") == protocolBuilder(Response.OK)
+    assert c4.TYPE(b"l") == protocolBuilder(SimpleString("string"))
+    c4.RPUSH(b"l2", b"a")
+    assert c4.PSETEX(b"l2", b"100000", b"str") == protocolBuilder(Response.OK)
+    assert c4.TYPE(b"l2") == protocolBuilder(SimpleString("string"))
+    # GETEX without options leaves the TTL alone
+    c5 = _commands()
+    c5.SET(b"k", b"v", b"EX", b"100")
+    assert c5.GETEX(b"k") == protocolBuilder(b"v")
+    assert 0 < c5.data.ttl(b"k") <= 100
+    # GETEX EXAT: future sets a TTL, past replies the value and deletes
+    c6 = _commands()
+    c6.SET(b"k", b"v")
+    assert c6.GETEX(b"k", b"EXAT", str(int(_wall.time()) + 100).encode()) == protocolBuilder(b"v")
+    assert c6.data.ttl(b"k") > 0
+    c6.SET(b"k2", b"v2")
+    assert c6.GETEX(b"k2", b"EXAT", b"1") == protocolBuilder(b"v2")
+    assert c6.GET(b"k2") == protocolBuilder(Response.NIL)
+    # GETEX PERSIST on a key without TTL stays a no-op
+    c7 = _commands()
+    c7.SET(b"k", b"v")
+    assert c7.GETEX(b"k", b"PERSIST") == protocolBuilder(b"v")
+    assert c7.data.ttl(b"k") == -1
+
+
+def test_msetnx_arity_error():
+    reply = _commands().dispatch([b"MSETNX", b"a"])
+    assert b"wrong number of arguments" in reply, reply
+
+
+def test_scan_option_details():
+    c = _commands()
+    c.SET(b"aaa", b"1")
+    c.SET(b"aab", b"1")
+    c.SET(b"bbb", b"1")
+    c.RPUSH(b"ll", b"x")
+    # COUNT is only a hint: valid values are ignored gracefully
+    assert c.SCAN(b"0", b"COUNT", b"2") == protocolBuilder(
+        [b"0", [b"aaa", b"aab", b"bbb", b"ll"]]
+    )
+    # repeated MATCH: the last one wins (redis behaviour)
+    assert c.SCAN(b"0", b"MATCH", b"a*", b"MATCH", b"b*") == protocolBuilder(
+        [b"0", [b"bbb"]]
+    )
+    # TYPE is case-insensitive and unknown types match nothing
+    assert c.SCAN(b"0", b"TYPE", b"LIST") == protocolBuilder([b"0", [b"ll"]])
+    assert c.SCAN(b"0", b"TYPE", b"string") == protocolBuilder(
+        [b"0", [b"aaa", b"aab", b"bbb"]]
+    )
+    assert c.SCAN(b"0", b"TYPE", b"nope") == protocolBuilder([b"0", []])
+
+
+def test_client_lowercase_subcommands():
+    c = _commands()
+    assert c.CLIENT(b"setinfo", b"lib-name", b"x") == protocolBuilder(Response.OK)
+    assert c.CLIENT(b"setinfo", b"lib-ver", b"1.0") == protocolBuilder(Response.OK)
+    assert c.CLIENT(b"setname", b"x") == protocolBuilder(Response.OK)
+    assert c.CLIENT(b"getname") == protocolBuilder(b"")
+    assert c.CLIENT(b"id") == protocolBuilder(1)
+
+
+def test_transactions_nil_nested_and_lowercase():
+    from kagni.commands import Session
+
+    c = _commands()
+    # EXEC array containing a nil entry
+    s = Session()
+    c.dispatch([b"MULTI"], s)
+    c.dispatch([b"GET", b"missing"], s)
+    c.dispatch([b"SET", b"ok", b"1"], s)
+    assert c.dispatch([b"EXEC"], s) == b"*2\r\n$-1\r\n+OK\r\n"
+    # nested array replies inside EXEC (queued LRANGE)
+    s2 = Session()
+    c.dispatch([b"MULTI"], s2)
+    c.dispatch([b"RPUSH", b"l", b"a", b"b"], s2)
+    c.dispatch([b"LRANGE", b"l", b"0", b"-1"], s2)
+    assert c.dispatch([b"EXEC"], s2) == (
+        b"*2\r\n:2\r\n*2\r\n$1\r\na\r\n$1\r\nb\r\n"
+    )
+    # lowercase command names work everywhere
+    s3 = Session()
+    assert c.dispatch([b"multi"], s3) == b"+OK\r\n"
+    assert c.dispatch([b"set", b"a", b"1"], s3) == b"+QUEUED\r\n"
+    assert c.dispatch([b"exec"], s3) == b"*1\r\n+OK\r\n"
+    assert c.dispatch([b"discard"], s3) == b"-ERR DISCARD without MULTI\r\n"
+    # transactions without a per-connection session are refused clearly
+    assert c.dispatch([b"MULTI"]).startswith(b"-ERR MULTI requires")
+    assert c.dispatch([b"EXEC"]) == b"-ERR EXEC without MULTI\r\n"
 
 
 def test_db_snapshot_replace_semantics():

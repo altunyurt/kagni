@@ -62,16 +62,48 @@ TYPE_NAMES = {
 }
 
 
-# decimal floats like redis parses them: no exponent, no inf/nan
-RE_FLOAT = re.compile(rb"[+-]?(\d+(\.\d*)?|\.\d+)\Z", re.ASCII)
+# redis parses floats with libc strtold (string2ld in util.c): the full
+# string must parse, no surrounding whitespace, nan rejected; exponents
+# and literal inf are accepted here and rejected later when the result
+# becomes NaN/Infinity.  Underflow-to-zero (ERANGE) is approximated by
+# rejecting non-zero literals that round to 0.0.
+def _parse_float(raw):
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError:
+        raise Errors.NOT_FLOAT
+    if not text or text != text.strip():
+        raise Errors.NOT_FLOAT
+    try:
+        value = float(text)
+    except ValueError:
+        raise Errors.NOT_FLOAT
+    if math.isnan(value):
+        raise Errors.NOT_FLOAT
+    if math.isinf(value):
+        core = text.lower().lstrip("+-")
+        if core not in ("inf", "infinity"):
+            raise Errors.NOT_FLOAT  # literal overflow (ERANGE)
+    elif value == 0.0 and any(ch in "123456789" for ch in text):
+        raise Errors.NOT_FLOAT  # underflow to zero (ERANGE)
+    return value
 
 
 def _format_float(value):
-    """Format an incrbyfloat result like redis: shortest repr, integer
-    values without a trailing '.0'."""
+    """Format an incrbyfloat result.
+
+    redis prints fixed-point with 17 significant long-double digits
+    (ld2string LD_STR_HUMAN); python floats are doubles, so the shortest
+    round-trip repr is used instead - identical output for the decimal
+    values people type (10.5, 0.1+0.2, ...), and exponents for very
+    large/small magnitudes.  Integral results lose the trailing '.0'
+    and -0 normalises to 0, like redis.  The stored strings always
+    re-parse through _parse_float."""
     text = repr(value)
     if text.endswith(".0"):
         text = text[:-2]
+    if text in ("-0",):
+        text = "0"
     return text
 
 
@@ -476,18 +508,12 @@ class CommandSetMixin:
 
     @command_decorator(b"INCRBYFLOAT")
     def INCRBYFLOAT(self, key: bytes, increment: bytes) -> bytes:
-        if not RE_FLOAT.match(increment):
-            raise Errors.NOT_FLOAT
-
+        # redis type-checks the key before parsing either value
         val = self._string(key)
-        if val is None:
-            current = 0.0
-        elif RE_FLOAT.match(val):
-            current = float(val)
-        else:
-            raise Errors.NOT_FLOAT
+        current = _parse_float(val) if val is not None else 0.0
+        incr = _parse_float(increment)
 
-        result = current + float(increment)
+        result = current + incr
         if not math.isfinite(result):
             raise Errors.FLOAT_OVERFLOW
         text = _format_float(result)
