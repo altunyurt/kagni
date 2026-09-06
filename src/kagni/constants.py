@@ -79,6 +79,10 @@ class Errors:
     WEIGHT_FLOAT = Error("ERR", "weight value is not a float")
     # hash counter errors
     HASH_NOT_INT = Error("ERR", "hash value is not an integer")
+    HASH_NOT_FLOAT = Error("ERR", "hash value is not a float")
+    # HINCRBYFLOAT rejects non-finite results with its own wording
+    # (the key-level INCRBYFLOAT says "increment would produce NaN...")
+    HASH_NAN_OR_INF = Error("ERR", "value is NaN or Infinity")
 
     @staticmethod
     def arity(command):

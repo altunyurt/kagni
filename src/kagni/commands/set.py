@@ -142,6 +142,14 @@ class CommandSetMixin:
         out = [member for member in cur if rgx is None or rgx.match(member)]
         return [b"0", out]
 
+    @command_decorator(b"SMISMEMBER")
+    def SMISMEMBER(self, key: bytes, *members: bytes) -> list:
+        """SMISMEMBER key member [member ...]: one 0/1 slot per member."""
+        if not members:
+            raise Errors.arity("smismember")
+        cur = self._set(key)
+        return [1 if cur is not None and member in cur else 0 for member in members]
+
     @command_decorator(b"SISMEMBER")
     def SISMEMBER(self, key: bytes, val: bytes) -> int:
         cur = self._set(key)

@@ -1750,3 +1750,57 @@ def test_reader_caps_announced_giant_payloads():
         for message in reader2.feed(b"$1\r\nx\r\n"):
             pass
         reader2.feed(b"")  # draining leftover state must not raise
+
+
+# --------------------------------------------- hash/set/string additions
+def test_hmset_hsetnx_hstrlen():
+    c = _commands()
+    assert c.HMSET(b"h", b"a", b"1", b"b", b"2") == protocolBuilder(Response.OK)
+    assert c.HMSET(b"noh", b"x", b"y") == protocolBuilder(Response.OK)
+    assert c.HGET(b"h", b"a") == protocolBuilder(b"1")
+    assert b"wrong number of arguments" in c.dispatch([b"HMSET", b"h", b"f"])
+    assert b"wrong number of arguments" in c.dispatch([b"HMSET", b"h"])
+    # HSETNX only writes missing fields
+    assert c.HSETNX(b"h", b"a", b"9") == protocolBuilder(0)
+    assert c.HSETNX(b"h", b"z", b"9") == protocolBuilder(1)
+    assert c.HSETNX(b"h2", b"f", b"v") == protocolBuilder(1)
+    assert c.HGET(b"h", b"a") == protocolBuilder(b"1")  # untouched
+    # HSTRLEN
+    c.HSET(b"h", b"txt", b"hello")
+    assert c.HSTRLEN(b"h", b"txt") == protocolBuilder(5)
+    assert c.HSTRLEN(b"h", b"nope") == protocolBuilder(0)
+    assert c.HSTRLEN(b"noh", b"a") == protocolBuilder(0)
+    c.SET(b"s", b"x")
+    _expect_error(lambda: c.HSTRLEN(b"s", b"f"), "WRONGTYPE")
+
+
+def test_hincrbyfloat():
+    c = _commands()
+    assert c.HINCRBYFLOAT(b"h", b"f", b"1.5") == protocolBuilder(b"1.5")
+    assert c.HINCRBYFLOAT(b"h", b"f", b"-0.25") == protocolBuilder(b"1.25")
+    assert c.HINCRBYFLOAT(b"noh", b"f", b"1.5") == protocolBuilder(b"1.5")
+    c.HSET(b"h", b"txt", b"abc")
+    err = _expect_error(lambda: c.HINCRBYFLOAT(b"h", b"txt", b"1"))
+    assert err.message == "hash value is not a float", err.message
+    _expect_error(lambda: c.HINCRBYFLOAT(b"h", b"f", b"x"))  # NOT_FLOAT
+    # literal inf increments are rejected at parse time, non-finite
+    # results use the INCRBYFLOAT wording
+    err = _expect_error(lambda: c.HINCRBYFLOAT(b"h", b"f", b"inf"))
+    assert err.message == "value is NaN or Infinity", err.message
+    c.HSET(b"h", b"inf", b"inf")
+    err = _expect_error(lambda: c.HINCRBYFLOAT(b"h", b"inf", b"1"))
+    assert err.message == "increment would produce NaN or Infinity", err.message
+
+
+def test_substr_alias_and_smismember():
+    c = _commands()
+    c.SET(b"k", b"hello")
+    assert c.SUBSTR(b"k", b"1", b"3") == c.GETRANGE(b"k", b"1", b"3")
+    assert c.SUBSTR(b"k", b"-3", b"-1") == protocolBuilder(b"llo")
+    assert c.SUBSTR(b"nok", b"0", b"-1") == protocolBuilder(b"")
+    assert c.TYPE(b"k") == protocolBuilder(SimpleString("string"))
+    c.SADD(b"s", b"a", b"b")
+    assert c.SMISMEMBER(b"s", b"a", b"nope", b"b") == protocolBuilder([1, 0, 1])
+    assert c.SMISMEMBER(b"nos", b"a", b"b") == protocolBuilder([0, 0])
+    assert b"wrong number of arguments" in c.dispatch([b"SMISMEMBER", b"s"])
+    _expect_error(lambda: c.SMISMEMBER(b"k", b"a"), "WRONGTYPE")

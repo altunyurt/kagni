@@ -1,11 +1,14 @@
+import math
 from typing import List
 
-from kagni.constants import Errors, Response
+from kagni.constants import Error, Errors, Response
 from .common import (
     INT64_MAX,
     INT64_MIN,
     KIND_HASH,
     RE_NUMERIC,
+    _format_float,
+    _parse_float,
     compile_glob,
     expect_kind,
     parse_scan_cursor,
@@ -28,7 +31,11 @@ class CommandSetMixin:
         4.0); replies with the number of fields that were newly added."""
         if len(field_values) < 2 or len(field_values) % 2:
             raise Errors.arity("hset")
+        return self._hset_pairs(key, field_values)
 
+    def _hset_pairs(self, key, field_values):
+        """Apply field/value pairs to the hash under *key*; returns how
+        many fields were newly added."""
         cur = self._hash(key)
         if cur is None:
             cur = {}
@@ -40,6 +47,27 @@ class CommandSetMixin:
                 new_fields += 1
             cur[field] = value
         return new_fields
+
+    @command_decorator(b"HMSET")
+    def HMSET(self, key: bytes, *field_values: bytes) -> Response.OK:
+        """HMSET key field value [field value ...] (deprecated alias of
+        HSET that replies +OK instead of the field count)."""
+        if len(field_values) < 2 or len(field_values) % 2:
+            raise Errors.arity("hmset")
+        self._hset_pairs(key, field_values)
+        return Response.OK
+
+    @command_decorator(b"HSETNX")
+    def HSETNX(self, key: bytes, field: bytes, val: bytes) -> int:
+        """HSETNX key field value: set only when the field is missing."""
+        cur = self._hash(key)
+        if cur is not None and field in cur:
+            return 0
+        if cur is None:
+            cur = {}
+            self.data[key] = cur
+        cur[field] = val
+        return 1
 
     @command_decorator(b"HGET")
     def HGET(self, key: bytes, field: bytes) -> (bytes, Response.NIL):
@@ -124,6 +152,41 @@ class CommandSetMixin:
                 continue
             out.extend((field, value))
         return [b"0", out]
+
+    @command_decorator(b"HSTRLEN")
+    def HSTRLEN(self, key: bytes, field: bytes) -> int:
+        cur = self._hash(key)
+        if cur is None or field not in cur:
+            return 0
+        return len(cur[field])
+
+    @command_decorator(b"HINCRBYFLOAT")
+    def HINCRBYFLOAT(self, key: bytes, field: bytes, increment: bytes) -> bytes:
+        """HINCRBYFLOAT key field increment: double counter on a field."""
+        increment = _parse_float(increment)  # nan -> NOT_FLOAT, like redis
+        if not math.isfinite(increment):
+            # redis rejects literal inf increments at parse time
+            raise Errors.HASH_NAN_OR_INF
+        cur = self._hash(key)
+        if cur is None:
+            cur = {}
+            self.data[key] = cur
+        raw = cur.get(field)
+        if raw is None:
+            current = 0.0
+        else:
+            try:
+                current = _parse_float(raw)
+            except Error:
+                raise Errors.HASH_NOT_FLOAT
+        result = current + increment
+        # a non-finite *result* (e.g. stored inf + 1) uses the key-level
+        # INCRBYFLOAT wording
+        if not math.isfinite(result):
+            raise Errors.FLOAT_OVERFLOW
+        text = _format_float(result)
+        cur[field] = text.encode()
+        return text.encode()
 
     @command_decorator(b"HINCRBY")
     def HINCRBY(self, key: bytes, field: bytes, increment: int) -> int:

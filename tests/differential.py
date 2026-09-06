@@ -40,7 +40,27 @@ KAGNI_PORT = free_port()
 
 BATCHES = [
     [(b"FLUSHALL",)],
-    # ---- collection scans
+    # ---- hash/set/string additions: hmset/hsetnx/hstrlen/hincrbyfloat/
+    # substr/smismember
+    [(b"HSET", b"h", b"a", b"1", b"b", b"2", b"txt", b"abc"),
+     (b"HMSET", b"h", b"c", b"3", b"d", b"4"), (b"HMSET", b"noh", b"x", b"y"),
+     (b"HMSET", b"h", b"e"), (b"HMSET", b"h"),
+     (b"HGETALL", b"h"),
+     (b"HSETNX", b"h", b"a", b"9"), (b"HSETNX", b"h", b"z", b"9"), (b"HSETNX", b"noh2", b"f", b"v"),
+     (b"HSTRLEN", b"h", b"a"), (b"HSTRLEN", b"h", b"txt"), (b"HSTRLEN", b"h", b"nope"),
+     (b"HSTRLEN", b"noh", b"a"),
+     (b"HINCRBYFLOAT", b"h", b"a", b"0.5"), (b"HINCRBYFLOAT", b"h", b"fresh", b"1.5"),
+     (b"HINCRBYFLOAT", b"h", b"fresh", b"-1.25"),
+     (b"HINCRBYFLOAT", b"h", b"txt", b"1"), (b"HINCRBYFLOAT", b"h", b"x", b"x"),
+     (b"HINCRBYFLOAT", b"noh3", b"f", b"1.5"),
+     (b"HSET", b"h", b"inf", b"inf"), (b"HINCRBYFLOAT", b"h", b"inf", b"-inf"),
+     (b"HINCRBYFLOAT", b"h", b"inf", b"1"),
+     (b"SET", b"k", b"hello"), (b"SUBSTR", b"k", b"1", b"3"), (b"SUBSTR", b"k", b"-3", b"-1"),
+     (b"SUBSTR", b"k", b"0", b"99"), (b"SUBSTR", b"nok", b"0", b"1"), (b"SUBSTR", b"k", b"x", b"1"),
+     (b"SADD", b"s", b"a", b"b", b"c"), (b"SMISMEMBER", b"s", b"a", b"nope", b"c"),
+     (b"SMISMEMBER", b"nos", b"a", b"b"), (b"SMISMEMBER", b"s"),
+     (b"SMISMEMBER", b"h", b"a")],
+    # ---- zadd options / replies
     [(b"HSET", b"h", b"f1", b"v1", b"f2", b"v2", b"other", b"x"),
      (b"HSCAN", b"h", b"0"), (b"HSCAN", b"h", b"0", b"MATCH", b"f*"),
      (b"HSCAN", b"h", b"0", b"COUNT", b"1"), (b"HSCAN", b"h", b"7"),

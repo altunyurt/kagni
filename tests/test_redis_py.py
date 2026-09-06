@@ -247,3 +247,23 @@ def test_expiretime_family(r):
     assert 0 < r.pttl("k") <= 1500
     # ttl rounds half-up to whole seconds like redis
     assert r.ttl("k") in (1, 2)
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")  # hmset is deprecated in redis-py
+def test_hash_and_set_additions(r):
+    assert r.hmset("h", {"a": "1", "b": "2"}) is True
+    assert r.hgetall("h") == {b"a": b"1", b"b": b"2"}
+    assert r.hsetnx("h", "a", "9") == 0
+    assert r.hsetnx("h", "c", "3") == 1
+    assert r.hstrlen("h", "c") == 1
+    assert r.hincrbyfloat("h", "f", 1.5) == 1.5
+    assert r.hincrbyfloat("h", "f", "-0.25") == 1.25
+    with pytest.raises(redis.ResponseError):
+        r.hincrbyfloat("h", "a", "x")  # not a float... 'a' holds "1"
+    r.hset("h", "txt", "abc")
+    with pytest.raises(redis.ResponseError) as exc:
+        r.hincrbyfloat("h", "txt", 1)
+    assert "not a float" in str(exc.value)
+    assert r.sadd("s", "a", "b", "c") == 3
+    assert r.smismember("s", "a", "nope", "c") == [1, 0, 1]
+    assert r.smismember("nos", "a") == [0]

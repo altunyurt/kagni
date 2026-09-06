@@ -71,6 +71,7 @@ TYPE_NAMES = {
 _WRITE_COMMANDS = frozenset(
     b"append decr decrby del expire expireat getdel getex getset incr "
     b"incrby incrbyfloat mset msetnx persist pexpire pexpireat psetex set "
+    b"hmset hsetnx hincrbyfloat "
     b"setex setnx setrange setbit bitop "
     b"linsert lmove lmpop lpop lpush lpushx lrem lset ltrim rpop rpoplpush "
     b"rpush rpushx "
@@ -83,12 +84,12 @@ _WRITE_COMMANDS = frozenset(
 # read-only commands never modify the keyspace; the rest (PING, CLIENT,
 # MULTI, ...) carry no flag at all, like redis' non-readonly flags
 _READONLY_COMMANDS = frozenset(
-    b"get mget strlen getrange exists type ttl pttl keys scan dbsize touch expiretime pexpiretime "
+    b"get mget strlen getrange substr exists type ttl pttl keys scan dbsize touch expiretime pexpiretime "
     b"echo config info command "
     b"getbit bitcount bitpos hscan sscan zscan "
     b"llen lindex lrange lpos "
-    b"scard sdiff sinter sismember smembers srandmember sscan sunion "
-    b"hget hmget hexists hlen hkeys hvals hgetall hscan "
+    b"scard sdiff sinter sismember smembers smismember srandmember sscan sunion "
+    b"hget hmget hexists hlen hkeys hvals hgetall hscan hstrlen "
     b"zcard zcount zdiff zinter zlexcount zmscore zrandmember zrange "
     b"zrangebylex zrangebyscore zrank zrevrange zrevrangebylex "
     b"zrevrangebyscore zrevrank zscore zunion zscan".split()
@@ -98,7 +99,7 @@ _ADMIN_COMMANDS = frozenset(b"flushall flushdb config".split())
 # redis' help groups for COMMAND DOCS output
 _COMMAND_GROUPS = {
     b"get": "string", b"mget": "string", b"strlen": "string",
-    b"getrange": "string", b"getset": "string", b"getdel": "string",
+    b"getrange": "string", b"substr": "string", b"getset": "string", b"getdel": "string",
     b"getex": "string", b"set": "string", b"setnx": "string",
     b"setex": "string", b"psetex": "string", b"mset": "string",
     b"msetnx": "string", b"append": "string", b"incr": "string",
@@ -114,14 +115,14 @@ _COMMAND_GROUPS = {
     b"rpop": "list", b"lmove": "list", b"rpoplpush": "list",
     b"lpos": "list", b"lmpop": "list",
     b"sadd": "set", b"scard": "set", b"smembers": "set",
-    b"sismember": "set", b"srem": "set", b"spop": "set",
+    b"sismember": "set", b"smismember": "set", b"srem": "set", b"spop": "set",
     b"srandmember": "set", b"smove": "set", b"sdiff": "set",
     b"sdiffstore": "set", b"sinter": "set", b"sinterstore": "set",
     b"sunion": "set", b"sunionstore": "set",
-    b"hset": "hash", b"hget": "hash", b"hmget": "hash",
+    b"hset": "hash", b"hmset": "hash", b"hsetnx": "hash", b"hget": "hash", b"hmget": "hash",
     b"hexists": "hash", b"hdel": "hash", b"hlen": "hash",
     b"hkeys": "hash", b"hvals": "hash", b"hgetall": "hash",
-    b"hincrby": "hash",
+    b"hincrby": "hash", b"hincrbyfloat": "hash", b"hstrlen": "hash",
     b"zadd": "sorted-set", b"zcard": "sorted-set",
     b"zscore": "sorted-set", b"zmscore": "sorted-set",
     b"zincrby": "sorted-set", b"zrank": "sorted-set",
@@ -801,8 +802,16 @@ class CommandSetMixin:
         return self._bump(key, -1)
 
     # -------------------------------------------------------------- ranges
+    @command_decorator(b"SUBSTR")
+    def SUBSTR(self, key: bytes, start: int, end: int) -> bytes:
+        """SUBSTR key start end: deprecated alias of GETRANGE."""
+        return self._getrange(key, start, end)
+
     @command_decorator(b"GETRANGE")
     def GETRANGE(self, key: bytes, start: int, end: int) -> bytes:
+        return self._getrange(key, start, end)
+
+    def _getrange(self, key, start, end):
         val = self._string(key)
         if val is None:
             return b""

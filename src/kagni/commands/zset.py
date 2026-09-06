@@ -142,6 +142,13 @@ class CommandSetMixin:
         if incr and len(rest) != 2:
             raise Errors.ZADD_INCR_PAIR
 
+        # parse and validate every score before the key lookup (redis
+        # order: a bad score errors even when the key holds a string)
+        pairs = [
+            (_parse_float(rest[i]), rest[i + 1])
+            for i in range(0, len(rest), 2)
+        ]
+
         zset = self._zset(key)
         if zset is None and xx:
             # XX never creates: nothing to update on a missing key
@@ -149,9 +156,7 @@ class CommandSetMixin:
 
         added = 0
         changed = 0
-        for i in range(0, len(rest), 2):
-            score = _parse_float(rest[i])
-            member = rest[i + 1]
+        for score, member in pairs:
             current = zset.score(member) if zset is not None else None
 
             if incr:
