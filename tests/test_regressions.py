@@ -1804,3 +1804,51 @@ def test_substr_alias_and_smismember():
     assert c.SMISMEMBER(b"nos", b"a", b"b") == protocolBuilder([0, 0])
     assert b"wrong number of arguments" in c.dispatch([b"SMISMEMBER", b"s"])
     _expect_error(lambda: c.SMISMEMBER(b"k", b"a"), "WRONGTYPE")
+
+
+# --------------------------------------------- sintercard / hrandfield
+def test_sintercard():
+    c = _commands()
+    c.SADD(b"a", b"1", b"2", b"3", b"4")
+    c.SADD(b"b", b"2", b"3", b"5")
+    c.SADD(b"c", b"3", b"5")
+    assert c.SINTERCARD(b"3", b"a", b"b", b"c") == protocolBuilder(1)
+    assert c.SINTERCARD(b"2", b"a", b"b") == protocolBuilder(2)
+    assert c.SINTERCARD(b"2", b"a", b"b", b"LIMIT", b"1") == protocolBuilder(1)
+    assert c.SINTERCARD(b"2", b"a", b"b", b"LIMIT", b"0") == protocolBuilder(2)
+    assert c.SINTERCARD(b"2", b"a", b"nok") == protocolBuilder(0)
+    assert c.SINTERCARD(b"1", b"a") == protocolBuilder(4)
+    assert c.SINTERCARD(b"2", b"a", b"a") == protocolBuilder(4)
+    # a missing first key is empty: nothing can intersect
+    assert c.SINTERCARD(b"2", b"nok", b"a") == protocolBuilder(0)
+    err = _expect_error(lambda: c.SINTERCARD(b"0", b"a"))
+    assert err.message == "numkeys should be greater than 0"
+    err = _expect_error(lambda: c.SINTERCARD(b"3", b"a", b"b"))
+    assert err.message == "Number of keys can't be greater than number of args"
+    err = _expect_error(lambda: c.SINTERCARD(b"2", b"a", b"b", b"LIMIT", b"-1"))
+    assert err.message == "LIMIT can't be negative"
+    _expect_error(lambda: c.SINTERCARD(b"2", b"a", b"b", b"LIMIT", b"x"))
+    _expect_error(lambda: c.SINTERCARD(b"2", b"a", b"b", b"BOGUS"))
+    c.SET(b"str", b"x")
+    _expect_error(lambda: c.SINTERCARD(b"2", b"a", b"str"), "WRONGTYPE")
+
+
+def test_hrandfield():
+    c = _commands()
+    c.HSET(b"h", b"a", b"1", b"b", b"2", b"c", b"3")
+    assert protocolParser(c.HRANDFIELD(b"h")) in (b"a", b"b", b"c")
+    assert len(protocolParser(c.HRANDFIELD(b"h", b"2"))) == 2
+    assert len(protocolParser(c.HRANDFIELD(b"h", b"-5"))) == 5
+    assert protocolParser(c.HRANDFIELD(b"h", b"0")) == []
+    picked = protocolParser(c.HRANDFIELD(b"h", b"9"))
+    assert sorted(picked) == [b"a", b"b", b"c"]
+    withvalues = protocolParser(c.HRANDFIELD(b"h", b"9", b"WITHVALUES"))
+    assert withvalues[::2] == sorted(picked)
+    assert withvalues[1::2] == [b"1", b"2", b"3"]
+    assert c.HRANDFIELD(b"noh") == protocolBuilder(Response.NIL)
+    assert protocolParser(c.HRANDFIELD(b"noh", b"2")) == []
+    assert protocolParser(c.HRANDFIELD(b"noh", b"2", b"WITHVALUES")) == []
+    _expect_error(lambda: c.HRANDFIELD(b"h", b"2", b"BOGUS"))
+    _expect_error(lambda: c.HRANDFIELD(b"h", b"WITHVALUES"))  # count expected
+    c.SET(b"str", b"x")
+    _expect_error(lambda: c.HRANDFIELD(b"str"), "WRONGTYPE")

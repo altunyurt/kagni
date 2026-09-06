@@ -267,3 +267,18 @@ def test_hash_and_set_additions(r):
     assert r.sadd("s", "a", "b", "c") == 3
     assert r.smismember("s", "a", "nope", "c") == [1, 0, 1]
     assert r.smismember("nos", "a") == [0]
+
+
+def test_sintercard_and_hrandfield(r):
+    r.sadd("a", "1", "2", "3", "4")
+    r.sadd("b", "2", "3", "5")
+    assert r.sintercard(2, ["a", "b"]) == 2
+    assert r.sintercard(2, ["a", "b"], limit=1) == 1
+    r.hset("h", mapping={"a": "1", "b": "2", "c": "3"})
+    assert r.hrandfield("h") in (b"a", b"b", b"c")
+    assert len(r.hrandfield("h", 2)) == 2
+    picked = r.hrandfield("h", 5, withvalues=True)  # flat field/value list
+    assert sorted(picked[::2]) == [b"a", b"b", b"c"]
+    assert sorted(picked[1::2]) == [b"1", b"2", b"3"]
+    assert r.hrandfield("noh") is None
+    assert r.hrandfield("noh", 2) == []

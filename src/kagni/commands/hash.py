@@ -1,4 +1,5 @@
 import math
+from random import choice, sample
 from typing import List
 
 from kagni.constants import Error, Errors, Response
@@ -133,6 +134,45 @@ class CommandSetMixin:
         if cur is None:
             return []
         return [b for a in cur.items() for b in a]
+
+    @command_decorator(b"HRANDFIELD")
+    def HRANDFIELD(self, key: bytes, count: int = None, *options: bytes):
+        """HRANDFIELD key [count [WITHVALUES]]: random fields, like
+        SRANDMEMBER but over a hash; WITHVALUES appends each field's
+        value."""
+        if count is None:
+            if options:
+                raise Errors.SYNTAX
+            cur = self._hash(key)
+            if cur is None or not cur:
+                return Response.NIL
+            return choice(list(cur))
+
+        withvalues = False
+        for option in options:
+            if option.upper() == b"WITHVALUES":
+                withvalues = True
+            else:
+                raise Errors.SYNTAX
+
+        cur = self._hash(key)
+        if cur is None or not cur:
+            return []
+        fields = list(cur)
+        if count < 0:
+            picked = [choice(fields) for _ in range(-count)]
+        elif count == 0:
+            picked = []
+        elif count >= len(fields):
+            picked = fields
+        else:
+            picked = sample(fields, count)
+        if not withvalues:
+            return picked
+        out = []
+        for field in picked:
+            out.extend((field, cur[field]))
+        return out
 
     @command_decorator(b"HSCAN")
     def HSCAN(self, key: bytes, cursor: bytes, *options: bytes):

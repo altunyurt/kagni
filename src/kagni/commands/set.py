@@ -3,7 +3,7 @@ from functools import reduce
 from operator import and_, or_, sub
 from typing import List
 
-from kagni.constants import Errors, Response
+from kagni.constants import Error, Errors, Response
 from .common import (
     KIND_SET,
     compile_glob,
@@ -11,6 +11,7 @@ from .common import (
     kind_of,
     parse_scan_cursor,
     parse_scan_options,
+    string2ll,
 )
 from .decorator import command_decorator
 
@@ -120,6 +121,46 @@ class CommandSetMixin:
         sets = self._sets(keys)
         result = reduce(and_, sets[1:], set(sets[0]) if sets else set())
         return list(result)
+
+    @command_decorator(b"SINTERCARD")
+    def SINTERCARD(self, numkeys: int, *rest: bytes) -> int:
+        """SINTERCARD numkeys key [key ...] [LIMIT limit]: cardinality of
+        the intersection (redis 7.0); counting stops once LIMIT is
+        reached, LIMIT 0 means no limit."""
+        if numkeys < 1:
+            raise Error("ERR", "numkeys should be greater than 0")
+        if numkeys > len(rest):
+            raise Error("ERR", "Number of keys can't be greater than number of args")
+        keys = rest[:numkeys]
+        limit = 0
+        j = numkeys
+        while j < len(rest):
+            opt = rest[j].upper()
+            if opt == b"LIMIT" and j + 1 < len(rest):
+                try:
+                    limit = string2ll(rest[j + 1])
+                except ValueError:
+                    limit = -1
+                if limit < 0:
+                    raise Error("ERR", "LIMIT can't be negative")
+                j += 2
+            else:
+                raise Errors.SYNTAX
+
+        sets = self._sets(keys)  # WRONGTYPE checks, missing -> empty set
+        first = sets[0]
+        if not first:
+            return 0
+        # count members of the first set present in every other set,
+        # stopping early once LIMIT members are found
+        others = sets[1:]
+        count = 0
+        for member in first:
+            if all(member in other for other in others):
+                count += 1
+                if limit and count >= limit:
+                    break
+        return count
 
     @command_decorator(b"SINTERSTORE")
     def SINTERSTORE(self, target: bytes, *keys: List[bytes]) -> int:

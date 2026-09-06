@@ -88,8 +88,8 @@ _READONLY_COMMANDS = frozenset(
     b"echo config info command "
     b"getbit bitcount bitpos hscan sscan zscan "
     b"llen lindex lrange lpos "
-    b"scard sdiff sinter sismember smembers smismember srandmember sscan sunion "
-    b"hget hmget hexists hlen hkeys hvals hgetall hscan hstrlen "
+    b"scard sdiff sinter sintercard sismember smembers smismember srandmember sscan sunion "
+    b"hget hmget hexists hlen hkeys hvals hgetall hscan hstrlen hrandfield "
     b"zcard zcount zdiff zinter zlexcount zmscore zrandmember zrange "
     b"zrangebylex zrangebyscore zrank zrevrange zrevrangebylex "
     b"zrevrangebyscore zrevrank zscore zunion zscan".split()
