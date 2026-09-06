@@ -56,9 +56,10 @@ class DB:
             con.close()
 
     def dump(self, snapshot, data=None, epoch=None):
-        """Persist a full snapshot of *snapshot* (a plain ``{key: value}``
-        dict - use ``Data.snapshot()`` for a consistent, off-loop-safe
-        copy - or a Data, which is iterated live).
+        """Persist a full snapshot of *snapshot* - the ``{key: (value,
+        wall_deadline_ns)}`` mapping ``Data.snapshot()`` returns, or a
+        Data (iterated live, as older callers do).  Rows are pickled as
+        they come, so the expiry persistence is invisible here.
 
         Blocking sqlite work: run it off the event loop
         (``trio.to_thread.run_sync`` / ``loop.run_in_executor``).

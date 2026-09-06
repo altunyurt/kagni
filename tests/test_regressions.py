@@ -1240,9 +1240,9 @@ def test_snapshot_is_consistent_and_purges_corpses():
     d[b"lst"].append(b"c")
     d[b"h"][b"g"] = b"y"
     d[b"s"].add(b"n")
-    assert snap[b"lst"] == deque([b"a", b"b"])
-    assert snap[b"h"] == {b"f": b"x"}
-    assert snap[b"s"] == {b"m"}
+    assert snap[b"lst"] == (deque([b"a", b"b"]), None)
+    assert snap[b"h"] == ({b"f": b"x"}, None)
+    assert snap[b"s"] == ({b"m"}, None)
     # expired corpses are dropped by the snapshot pass and purged
     d._storage[b"dead"] = {"value": b"x", "expires_at": 1}  # long past
     assert b"dead" not in d.snapshot()
@@ -1402,12 +1402,11 @@ def test_zset_scan_type_and_snapshot():
     snap = c.data.snapshot()
     c.ZADD(b"z", b"2", b"b")
     c.data[b"z"].add(b"c", 3)
-    assert len(snap[b"z"]) == 1
+    assert len(snap[b"z"][0]) == 1
     c.ZADD(b"z2", b"9", b"m")
     snap2 = c.data.snapshot()
     c2 = _commands()
-    for key, value in snap2.items():
-        c2.data[key] = value
+    c2.data.restore(snap2)
     assert c2.ZSCORE(b"z2", b"m") == protocolBuilder(b"9")
 
 
@@ -1520,10 +1519,56 @@ def test_zset_persistence_roundtrip():
         db.dump(c.data.snapshot(), c.data, c.data.epoch)
         restored = db.load()
         c2 = Commands(data=Data())
-        for key, value in restored.items():
-            c2.data[key] = value
+        c2.data.restore(restored)
         assert c2.ZRANGE(b"z", b"0", b"-1", b"WITHSCORES") == protocolBuilder(
             [b"a", b"1.5", b"b", b"2"]
         )
         assert c2.ZADD(b"z", b"3", b"c") == protocolBuilder(1)
         assert c2.HGET(b"h", b"f") == protocolBuilder(b"v")
+
+
+# ------------------------------------------- expiry survives snapshots
+def test_expiry_persists_across_snapshot_restore():
+    import os
+    import tempfile
+
+    from kagni.db import DB
+
+    c = _commands()
+    c.SET(b"eternal", b"v")          # no TTL: stays eternal
+    c.SET(b"short", b"v", b"EX", b"100")
+    c.SET(b"ms", b"v")
+    c.PEXPIRE(b"ms", b"1500")
+    c.RPUSH(b"lst", b"a")
+    c.EXPIRE(b"lst", b"50")
+    with tempfile.TemporaryDirectory() as tmp:
+        db = DB(os.path.join(tmp, "k.sqlite"))
+        db.dump(c.data.snapshot(), c.data, c.data.epoch)
+
+        # fresh boot: restore re-arms the monotonic deadlines
+        restored = Data()
+        restored.restore(db.load())
+        assert restored.get(b"eternal") == b"v"
+        assert restored.ttl(b"eternal") == -1
+        assert restored.get(b"short") == b"v"
+        assert 0 < restored.ttl(b"short") <= 100
+        assert 1000 < restored.ttl_ms(b"ms") <= 1500
+        assert 0 < restored.ttl(b"lst") <= 50
+
+    # a key whose deadline passed while the server was down is dropped,
+    # like redis discarding expired keys on load
+    d = Data()
+    d[b"k"] = b"v"
+    snap = d.snapshot()
+    snap[b"k"] = (b"v", 1)  # deadline in the distant past
+    restored = Data()
+    restored.restore(snap)
+    assert len(restored) == 0
+
+    # legacy snapshots (plain values, written before expiry persistence)
+    # still restore, without a TTL
+    legacy = {b"old": b"value"}
+    restored2 = Data()
+    restored2.restore(legacy)
+    assert restored2.get(b"old") == b"value"
+    assert restored2.ttl(b"old") == -1

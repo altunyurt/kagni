@@ -91,8 +91,9 @@ def build_runtime(db_path, save=True):
     except Exception:
         log.exception("could not restore snapshot, starting empty")
     else:
-        for key, value in snapshot.items():
-            data[key] = value
+        # restore re-arms persisted expiries and drops keys whose
+        # deadline passed while the server was down
+        data.restore(snapshot)
         if len(data):
             log.info("restored %d keys", len(data))
 

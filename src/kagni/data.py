@@ -112,18 +112,58 @@ class Data(MutableMapping):
         mutations cannot tear the copy while a worker thread pickles it.
         Expired corpses are dropped in the same pass, preserving the
         sweep cadence the periodic dumps used to provide.
+
+        Returns ``{key: (value, wall_deadline_ns)}`` where the deadline
+        is None for keys without an expiry: the monotonic expiry is
+        converted to an absolute wall-clock deadline here so a snapshot
+        survives restarts (the monotonic clock is per-boot).  The
+        conversion reads both clocks once; a wall-clock step between an
+        expiry being set and the snapshot shifts the stored deadline by
+        the step, which is the usual NTP caveat.
         """
         now = monotonic_ns_time()
+        now_wall = wall_clock_ns()
         out = {}
         dead = []
         for key, entry in self._storage.items():
             if not self._live(entry, now):
                 dead.append(key)
                 continue
-            out[key] = _copy_value(entry["value"])
+            expires_at = entry["expires_at"]
+            if expires_at is None:
+                out[key] = (_copy_value(entry["value"]), None)
+            else:
+                out[key] = (_copy_value(entry["value"]), now_wall + (expires_at - now))
         for key in dead:
             del self._storage[key]
         return out
+
+    def restore(self, snapshot):
+        """Load a persisted snapshot into this (empty) store.
+
+        Accepts ``Data.snapshot()`` output - ``{key: (value,
+        wall_deadline_ns)}`` - as well as legacy snapshots holding plain
+        values (written before expiries were persisted); legacy keys
+        restore without a TTL.  Keys whose wall deadline already passed
+        are dropped, like redis discarding expired keys on load.
+        """
+        now = monotonic_ns_time()
+        for key, item in snapshot.items():
+            if (
+                isinstance(item, tuple)
+                and len(item) == 2
+                and (item[1] is None or isinstance(item[1], int))
+            ):
+                value, deadline = item
+            else:
+                value, deadline = item, None  # legacy snapshot row
+            if deadline is None:
+                self._storage[key] = {"value": value, "expires_at": None}
+                continue
+            expires_at = now + (deadline - wall_clock_ns())
+            if expires_at <= now:
+                continue  # expired while the server was away
+            self._storage[key] = {"value": value, "expires_at": expires_at}
 
     def set(self, key, value, wall_deadline_ns=None, keep_ttl=False):
         """Store a value like redis SET.

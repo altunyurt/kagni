@@ -94,7 +94,7 @@ Supervisord also expects foreground processes:
 
 ## Storage
 
-- Everything lives in memory with lazy key expiry (`EXPIRE`/`TTL`); the sqlite snapshot is a full-table transaction, replaced every `--dump-interval` seconds and restored at boot.
+- Everything lives in memory with lazy key expiry (`EXPIRE`/`TTL`); the sqlite snapshot is a full-table transaction, replaced every `--dump-interval` seconds and restored at boot. Expiries are persisted with each value (as absolute wall-clock deadlines) and re-armed on restore; keys whose deadline passed while the server was down are dropped, like redis.
 - Strings are byte strings with redis semantics (counters are strings too). Lists are deques, giving O(1) push/pop at both ends. Bitmaps are roaring bitmaps, so sparse high-offset data stays compact where a redis-style byte string would grow linearly. Sorted sets are member→score dicts over a `bisect`-kept `(score, member)` list: rank queries are O(log n), writes shift the list in C, and score ties break on member bytes like redis.
 
 ## Commands
