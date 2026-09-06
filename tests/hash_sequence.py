@@ -98,7 +98,7 @@ test_sequence = [
             "returns": [],
         },
 {
-            "name": "Check HGETALL for existing key with no fields ",
+            "name": "Check HGETALL after its only field was deleted",
             "command": "HGETALL",
             "args": [b"k"],
             "returns": [],
@@ -106,6 +106,8 @@ test_sequence = [
                 {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1},
                 {"command": "HDEL", "args": [b"k", b"f"], "returns": 1},
             ],
+            # redis deletes a hash that loses its last field
+            "expects": lambda cmds: b"k" not in cmds.data,
         },
 {
             "name": "Check HGETALL return value for existing key and fields",

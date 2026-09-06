@@ -1,6 +1,6 @@
 from typing import List
 
-from kagni.constants import Response
+from kagni.constants import Errors, Response
 from .common import KIND_HASH, expect_kind
 from .decorator import command_decorator
 
@@ -40,6 +40,8 @@ class CommandSetMixin:
 
     @command_decorator(b"HDEL")
     def HDEL(self, key: bytes, *fields: List[bytes]) -> int:
+        if not fields:
+            raise Errors.arity("hdel")
         cur = self._hash(key)
         if cur is None:
             return 0
@@ -49,6 +51,9 @@ class CommandSetMixin:
             if field in cur:
                 del cur[field]
                 removed += 1
+        if not cur:
+            # redis: the key disappears with its last field
+            self.data.remove(key)
         return removed
 
     @command_decorator(b"HGETALL")

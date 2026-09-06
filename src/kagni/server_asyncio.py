@@ -57,14 +57,21 @@ class RedisServerProtocol(asyncio.Protocol):
 
 
 async def dumper(db, data, interval):
-    """Periodically snapshot the in-memory state to sqlite."""
+    """Periodically snapshot the in-memory state to sqlite.
+
+    The consistent copy is taken on the loop thread (the single mutator)
+    and only the sqlite commit runs in the executor; the commit carries
+    the epoch the snapshot was taken in, so a snapshot that predates a
+    FLUSHDB stands down instead of resurrecting flushed keys.
+    """
     loop = asyncio.get_running_loop()
     while True:
         await asyncio.sleep(interval)
-        if not data:
+        snapshot = data.snapshot()
+        if not snapshot:
             continue
         try:
-            await loop.run_in_executor(None, db.dump, data)
+            await loop.run_in_executor(None, db.dump, snapshot, data, data.epoch)
         except Exception:
             log.exception("database dump failed")
 
@@ -106,7 +113,9 @@ async def amain(config):
                 pass
         if db is not None and config.save:
             try:
-                await loop.run_in_executor(None, db.dump, data)
+                await loop.run_in_executor(
+                    None, db.dump, data.snapshot(), data, data.epoch
+                )
             except Exception:
                 log.exception("final database dump failed")
         if created_socket is not None:

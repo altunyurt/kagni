@@ -34,7 +34,8 @@ class CommandSetMixin:
 
     @command_decorator(b"SETBIT")
     def SETBIT(self, key: bytes, bit: int, val: int) -> int:
-        if bit < 0:
+        # redis caps the offset at 2**32-1 bits (the 512MB string limit)
+        if bit < 0 or bit > 2 ** 32 - 1:
             raise Errors.BIT_OFFSET
         if val not in (0, 1):
             raise Errors.BIT_VALUE

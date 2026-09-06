@@ -5,8 +5,9 @@ import re
 import time as _wall
 
 from kagni.constants import Error, Errors, Response, SimpleString
-from kagni.data import Data
 from .common import (
+    INT64_MAX,
+    INT64_MIN,
     KIND_BITMAP,
     KIND_HASH,
     KIND_LIST,
@@ -14,12 +15,9 @@ from .common import (
     KIND_STRING,
     expect_kind,
     kind_of,
+    string2ll,
 )
 from .decorator import command_decorator
-
-# redis-style 64-bit signed integer range for INCR/DECR
-INT64_MIN = -(2 ** 63)
-INT64_MAX = 2 ** 63 - 1
 
 # non-negative or negative decimal integer, e.g. b"0", b"-42"
 RE_NUMERIC = re.compile(rb"-?\d+\Z", re.ASCII)
@@ -172,10 +170,8 @@ def _expire_wall_deadline(command, unit, raw):
     non-integers and the per-command expire-time error for non-positive
     or overflowing values."""
     try:
-        value = int(raw, 10)
-    except (ValueError, TypeError):
-        raise Errors.NOT_INT
-    if value < -(2 ** 63) or value > 2 ** 63 - 1:
+        value = string2ll(raw)
+    except ValueError:
         raise Errors.NOT_INT
     if value <= 0:
         raise _expire_time_error(command)
@@ -277,14 +273,16 @@ class CommandSetMixin:
             # so even when the write is skipped), otherwise nil
             return old if old is not None else Response.NIL
 
+        # the size guard fires before the write (redis errors and stores
+        # nothing; it also does not fire when NX/XX blocked the write)
+        if len(val) > MAX_STRING_SIZE:
+            raise Errors.STRING_OVERFLOW
         self.data.set(
             key,
             val,
             wall_deadline_ns=deadline,
             keep_ttl=b"KEEPTTL" in flags,
         )
-        if len(val) > MAX_STRING_SIZE:
-            raise Errors.STRING_OVERFLOW
         # with GET the reply is always the old value (or nil when the key
         # did not exist), otherwise +OK
         return old if old is not None else (Response.NIL if b"GET" in flags else Response.OK)
@@ -293,6 +291,8 @@ class CommandSetMixin:
     def SETNX(self, key: bytes, val: bytes) -> int:
         if key in self.data:
             return 0
+        if len(val) > MAX_STRING_SIZE:
+            raise Errors.STRING_OVERFLOW
         self.data.set(key, val)
         return 1
 
@@ -345,11 +345,15 @@ class CommandSetMixin:
     @command_decorator(b"GETSET")
     def GETSET(self, key: bytes, val: bytes) -> (bytes, Response.NIL):
         retval = self._string(key)
+        if len(val) > MAX_STRING_SIZE:
+            raise Errors.STRING_OVERFLOW
         self.data[key] = val
         return Response.NIL if retval is None else retval
 
     @command_decorator(b"MGET")
     def MGET(self, *keys) -> list:
+        if not keys:
+            raise Errors.arity("mget")
         out = []
         for key in keys:
             val = self._string(key)
@@ -360,6 +364,9 @@ class CommandSetMixin:
     def MSET(self, *args: bytes) -> Response.OK:
         if len(args) < 2 or len(args) % 2:
             raise Errors.arity("mset")
+        for value in args[1::2]:
+            if len(value) > MAX_STRING_SIZE:
+                raise Errors.STRING_OVERFLOW
         self.data.update(zip(args[::2], args[1::2]))
         return Response.OK
 
@@ -370,11 +377,16 @@ class CommandSetMixin:
         keys = args[::2]
         if any(key in self.data for key in keys):
             return 0  # nothing is set when at least one key exists
+        for value in args[1::2]:
+            if len(value) > MAX_STRING_SIZE:
+                raise Errors.STRING_OVERFLOW
         self.data.update(zip(keys, args[1::2]))
         return 1
 
     @command_decorator(b"DEL")
     def DEL(self, *keys) -> int:
+        if not keys:
+            raise Errors.arity("del")
         return sum(self.data.remove(key) for key in keys)
 
     @command_decorator(b"EXPIRE")
@@ -390,12 +402,10 @@ class CommandSetMixin:
         return self.data.ttl(key)
 
     @command_decorator(b"KEYS")
-    def KEYS(self, pattern: bytes = None) -> List[bytes]:
+    def KEYS(self, pattern: bytes) -> List[bytes]:
         # surrogateescape keeps raw (non-utf8) patterns and keys working
         re_pattern = fnmatch.translate(
-            (pattern if pattern is not None else b"*").decode(
-                "utf-8", "surrogateescape"
-            )
+            pattern.decode("utf-8", "surrogateescape")
         )
         rgx = re.compile(re_pattern.encode("utf-8", "surrogateescape"))
         return [key for key in self.data if rgx.match(key)]
@@ -412,8 +422,8 @@ class CommandSetMixin:
         TYPE command's names.
         """
         try:
-            cursor_value = int(cursor, 10)
-        except (ValueError, TypeError):
+            cursor_value = string2ll(cursor)
+        except ValueError:
             raise Errors.INVALID_CURSOR
         if cursor_value < 0:
             raise Errors.INVALID_CURSOR
@@ -434,9 +444,13 @@ class CommandSetMixin:
                     pattern = value
                 elif opt == b"COUNT":
                     try:
-                        int(value, 10)
-                    except (ValueError, TypeError):
+                        count = string2ll(value)
+                    except ValueError:
                         raise Errors.NOT_INT
+                    if count < 1:
+                        # redis rejects non-positive COUNT with a syntax
+                        # error even though the value is only a hint
+                        raise Errors.SYNTAX
                 else:
                     type_filter = value.lower().decode("ascii", "replace")
             else:
@@ -495,7 +509,9 @@ class CommandSetMixin:
         result = current + by
         if result < INT64_MIN or result > INT64_MAX:
             raise Errors.OVERFLOW
-        self.data[key] = f"{result}".encode()
+        # keep_ttl: redis counters update the value without touching the
+        # key's expiration (only the SET family clears TTLs)
+        self.data.set(key, f"{result}".encode(), keep_ttl=True)
         return result
 
     @command_decorator(b"INCRBY")
@@ -517,7 +533,8 @@ class CommandSetMixin:
         if not math.isfinite(result):
             raise Errors.FLOAT_OVERFLOW
         text = _format_float(result)
-        self.data[key] = text.encode()
+        # keep_ttl: like INCR, INCRBYFLOAT leaves an existing TTL alone
+        self.data.set(key, text.encode(), keep_ttl=True)
         return text.encode()
 
     @command_decorator(b"DECRBY")
@@ -553,20 +570,30 @@ class CommandSetMixin:
             val = val.ljust(offset, b"\x00") + value
         else:
             val = val[:offset] + value + val[offset + len(value):]
-        self.data[key] = val
+        # keep_ttl: SETRANGE edits the string in place in redis and leaves
+        # an existing TTL alone (unlike SET/GETSET)
+        self.data.set(key, val, keep_ttl=True)
         return len(val)
 
     # ---------------------------------------------------------------- misc
     @command_decorator(b"FLUSHDB")
     def FLUSHDB(self):
-        self.data = Data()
-        if self.persistence is not None:
-            self.persistence.flush()
-        return Response.OK
+        return self._flush_all()
 
     @command_decorator(b"FLUSHALL")
     def FLUSHALL(self):
-        self.data = Data()
+        return self._flush_all()
+
+    def _flush_all(self):
+        """Empty the store and the persisted snapshot.
+
+        The store is cleared in place - not swapped for a fresh Data - so
+        the snapshot dumper tasks (which hold a reference to this object)
+        keep seeing the emptied store; the epoch bump inside clear()
+        makes any snapshot taken before the flush fail its commit guard.
+        The wipe must run after clear() so stale commits stand down.
+        """
+        self.data.clear()
         if self.persistence is not None:
             self.persistence.flush()
         return Response.OK
@@ -577,7 +604,9 @@ class CommandSetMixin:
         value = (current if current is not None else b"") + val
         if len(value) > MAX_STRING_SIZE:
             raise Errors.STRING_OVERFLOW
-        self.data[key] = value
+        # keep_ttl: redis APPEND appends in place and leaves an existing
+        # TTL alone
+        self.data.set(key, value, keep_ttl=True)
         return len(value)
 
     @command_decorator(b"STRLEN")

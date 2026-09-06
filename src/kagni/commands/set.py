@@ -36,8 +36,14 @@ class CommandSetMixin:
         if not keys:
             raise Errors.arity(command)
 
+    @staticmethod
+    def _assert_members(members, command):
+        if not members:
+            raise Errors.arity(command)
+
     @command_decorator(b"SADD")
     def SADD(self, key: bytes, *vals: List[bytes]) -> int:
+        self._assert_members(vals, "sadd")
         cur = self._set(key)
         if cur is None:
             self.data[key] = set(vals)
@@ -62,6 +68,7 @@ class CommandSetMixin:
 
     @command_decorator(b"SREM")
     def SREM(self, key: bytes, *val: List[bytes]) -> int:
+        self._assert_members(val, "srem")
         cur = self._set(key)
         if cur is None:
             return 0
@@ -71,6 +78,9 @@ class CommandSetMixin:
             if member in cur:
                 cur.discard(member)
                 removed += 1
+        if not cur:
+            # redis: the key disappears with its last member
+            self.data.remove(key)
         return removed
 
     @command_decorator(b"SDIFF")
@@ -80,14 +90,22 @@ class CommandSetMixin:
         result = reduce(sub, sets[1:], set(sets[0]) if sets else set())
         return list(result)
 
+    def _store_result(self, target, result):
+        """Store a computed set; an empty result deletes the target, like
+        redis (empty collections never persist)."""
+        if result:
+            self.data[target] = result
+        else:
+            self.data.remove(target)
+        return len(result)
+
     @command_decorator(b"SDIFFSTORE")
     def SDIFFSTORE(self, target: bytes, *keys: List[bytes]) -> int:
         self._assert_keys(keys, "sdiffstore")
         sets = self._sets(keys)
         # copy the first set: the stored result must never alias a source
         result = reduce(sub, sets[1:], set(sets[0]) if sets else set())
-        self.data[target] = result
-        return len(result)
+        return self._store_result(target, result)
 
     @command_decorator(b"SINTER")
     def SINTER(self, *keys: List[bytes]) -> list:
@@ -101,8 +119,7 @@ class CommandSetMixin:
         self._assert_keys(keys, "sinterstore")
         sets = self._sets(keys)
         result = reduce(and_, sets[1:], set(sets[0]) if sets else set())
-        self.data[target] = result
-        return len(result)
+        return self._store_result(target, result)
 
     @command_decorator(b"SISMEMBER")
     def SISMEMBER(self, key: bytes, val: bytes) -> int:
@@ -118,13 +135,17 @@ class CommandSetMixin:
             return 0
         if val not in src:
             return 0
-
-        src.discard(val)
+        # the destination is type-checked before the member leaves the
+        # source (redis order: a WRONGTYPE target must not lose it)
         dst = self._set(target)
+        src.discard(val)
         if dst is None:
             dst = set()
             self.data[target] = dst
         dst.add(val)
+        if not src:
+            # redis: an emptied source disappears
+            self.data.remove(source)
         return 1
 
     @command_decorator(b"SPOP")
@@ -137,15 +158,18 @@ class CommandSetMixin:
             return Response.NIL if count is None else []
 
         if count is None:
-            return cur.pop()
+            val = cur.pop()
+            if not cur:
+                # redis: the key disappears with its last member
+                self.data.remove(key)
+            return val
 
         if count == 0:
             return []
         if count >= len(cur):
-            # popping everything keeps redis' guarantee that members are
-            # removed; the (now empty) set stays stored like before
+            # popping everything removes the key, like redis
             popped = list(cur)
-            cur.clear()
+            self.data.remove(key)
             return popped
         return [cur.pop() for _ in range(count)]
 
@@ -180,5 +204,4 @@ class CommandSetMixin:
         self._assert_keys(keys, "sunionstore")
         sets = self._sets(keys)
         result = reduce(or_, sets[1:], set(sets[0]) if sets else set())
-        self.data[target] = result
-        return len(result)
+        return self._store_result(target, result)

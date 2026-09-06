@@ -285,7 +285,9 @@ test_sequence = [
             "args": [b"s", b"t", b"val"],
             "returns": 1,
             "depends": [{"command": "SADD", "args": [b"s", b"val"], "returns": 1}],
-            "expects": lambda cmds: b"val" not in cmds.data[b"s"]
+            # the source held a single member, so it disappears (redis
+            # deletes a set emptied by SMOVE)
+            "expects": lambda cmds: b"s" not in cmds.data
             and b"val" in cmds.data[b"t"],
         },
 {
@@ -297,7 +299,8 @@ test_sequence = [
                 {"command": "SADD", "args": [b"s", b"val"], "returns": 1},
                 {"command": "SADD", "args": [b"t", b"val"], "returns": 1},
             ],
-            "expects": lambda cmds: b"val" not in cmds.data[b"s"]
+            # the source held a single member, so it disappears
+            "expects": lambda cmds: b"s" not in cmds.data
             and b"val" in cmds.data[b"t"],
         },
 {
@@ -309,7 +312,8 @@ test_sequence = [
                 {"command": "SADD", "args": [b"s", b"val"], "returns": 1},
                 {"command": "SADD", "args": [b"t", b"notval"], "returns": 1},
             ],
-            "expects": lambda cmds: b"val" not in cmds.data[b"s"]
+            # the source held a single member, so it disappears
+            "expects": lambda cmds: b"s" not in cmds.data
             and b"val" in cmds.data[b"t"],
         },
 {

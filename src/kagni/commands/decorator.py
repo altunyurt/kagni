@@ -3,9 +3,13 @@ import inspect
 
 from kagni.constants import Errors
 from kagni.resp import protocolBuilder
+from .common import string2ll
 
 CASTERS = {
-    "bytes_to_int": lambda arg: int(arg, base=10),
+    # redis string2ll semantics: rejects '+', whitespace, leading zeros
+    # and anything outside the signed 64-bit range (raises ValueError,
+    # translated to NOT_INT below)
+    "bytes_to_int": string2ll,
     "bytes_to_str": lambda arg: arg.decode(),
 }
 

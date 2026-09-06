@@ -15,6 +15,34 @@ KIND_SET = "set"
 KIND_BITMAP = "bitmap"
 KIND_LIST = "list"
 
+INT64_MIN = -(2 ** 63)
+INT64_MAX = 2 ** 63 - 1
+
+
+def string2ll(raw):
+    """Parse a redis-style integer argument (mirrors string2ll in
+    util.c): an optional leading '-', plain ASCII digits, no '+', no
+    whitespace, no leading zeros (a bare b"0" excepted), and the value
+    must fit a signed 64-bit integer.  Raises ValueError otherwise; the
+    callers translate that into their per-command NOT_INT / cursor
+    errors."""
+    if not isinstance(raw, bytes) or not raw:
+        raise ValueError
+    if raw == b"0":
+        return 0
+    negative = raw[0] == ord("-")
+    digits = raw[1:] if negative else raw
+    if not digits or digits[0] == ord("0"):
+        raise ValueError  # empty after '-' or a leading zero
+    if any(byte < ord("0") or byte > ord("9") for byte in digits):
+        raise ValueError
+    value = int(digits)
+    if negative:
+        value = -value
+    if value < INT64_MIN or value > INT64_MAX:
+        raise ValueError
+    return value
+
 
 def kind_of(value):
     """Name of the kind a stored value belongs to, or None if unknown."""

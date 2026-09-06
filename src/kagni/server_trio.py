@@ -43,13 +43,20 @@ async def protocol_handler(stream, command_handler=None):
 
 
 async def dumper(db, data, interval):
-    """Periodically snapshot the in-memory state to sqlite, off the loop."""
+    """Periodically snapshot the in-memory state to sqlite, off the loop.
+
+    The consistent copy is taken on the trio thread (the single mutator)
+    and only the sqlite commit runs in a worker thread; the commit
+    carries the epoch the snapshot was taken in, so a snapshot that
+    predates a FLUSHDB stands down instead of resurrecting flushed keys.
+    """
     while True:
         await trio.sleep(interval)
-        if not data:
+        snapshot = data.snapshot()
+        if not snapshot:
             continue
         try:
-            await trio.to_thread.run_sync(db.dump, data)
+            await trio.to_thread.run_sync(db.dump, snapshot, data, data.epoch)
         except Exception:
             log.exception("database dump failed")
 
@@ -98,7 +105,7 @@ async def amain(config):
             # best-effort final snapshot on shutdown (serve_listeners closed
             # the listeners when the nursery was cancelled)
             try:
-                db.dump(data)
+                db.dump(data.snapshot(), data, data.epoch)
             except Exception:
                 log.exception("final database dump failed")
         if created_socket is not None:

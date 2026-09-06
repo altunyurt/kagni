@@ -22,7 +22,7 @@ from itertools import islice
 from typing import List
 
 from kagni.constants import Error, Errors, Response
-from .common import KIND_LIST, expect_kind
+from .common import KIND_LIST, expect_kind, string2ll
 from .decorator import command_decorator
 
 __all__ = ["CommandSetMixin"]
@@ -182,7 +182,8 @@ class CommandSetMixin:
             end = length - 1
         if start == 0 and end == length - 1:
             return Response.OK  # trim to the full list is a no-op
-        self.data[key] = deque(islice(lst, start, end + 1))
+        # keep_ttl: redis LTRIM trims in place and leaves the TTL alone
+        self.data.set(key, deque(islice(lst, start, end + 1)), keep_ttl=True)
         return Response.OK
 
     @command_decorator(b"LREM")
@@ -211,7 +212,8 @@ class CommandSetMixin:
 
         if removed:
             if kept:
-                self.data[key] = kept
+                # keep_ttl: redis LREM trims in place and leaves the TTL alone
+                self.data.set(key, kept, keep_ttl=True)
             else:
                 self.data.remove(key)
         return removed
@@ -299,8 +301,6 @@ class CommandSetMixin:
         mismatches and stray options are syntax errors; numkeys/count
         must be >= 1 with redis' exact error messages.
         """
-        if numkeys > 2 ** 63 - 1:
-            raise Errors.NOT_INT
         if numkeys < 1:
             raise Error("ERR", "numkeys should be greater than 0")
         if numkeys + 1 > len(rest):
@@ -315,10 +315,8 @@ class CommandSetMixin:
             option = rest[j].upper()
             if option == b"COUNT" and j + 1 < len(rest):
                 try:
-                    count = int(rest[j + 1], 10)
-                except (ValueError, TypeError):
-                    raise Errors.NOT_INT
-                if count > 2 ** 63 - 1:
+                    count = string2ll(rest[j + 1])
+                except ValueError:
                     raise Errors.NOT_INT
                 if count < 1:
                     raise Error("ERR", "count should be greater than 0")
@@ -358,10 +356,8 @@ class CommandSetMixin:
             if option not in (b"RANK", b"COUNT", b"MAXLEN") or j + 1 >= len(options):
                 raise Errors.SYNTAX
             try:
-                value = int(options[j + 1], 10)
-            except (ValueError, TypeError):
-                raise Errors.NOT_INT
-            if value < -(2 ** 63) or value > 2 ** 63 - 1:
+                value = string2ll(options[j + 1])
+            except ValueError:
                 raise Errors.NOT_INT
             j += 2
 

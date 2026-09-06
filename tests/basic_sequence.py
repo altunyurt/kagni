@@ -191,9 +191,9 @@ test_sequence = [
             "returns": -2,
         },
 {
-            "name": "Check KEYS with no pattern return value",
+            "name": "Check KEYS with glob * pattern return value",
             "command": "KEYS",
-            "args": [],
+            "args": [b"*"],
             "depends": [
                 {
                     "command": "MSET",

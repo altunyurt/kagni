@@ -1,3 +1,4 @@
+from collections import deque
 from collections.abc import MutableMapping
 from math import ceil
 from time import monotonic_ns as monotonic_ns_time
@@ -41,6 +42,9 @@ class Data(MutableMapping):
 
     def __init__(self):
         self._storage = {}
+        # bumped by clear(): lets an in-flight snapshot commit detect that
+        # it predates a FLUSHDB and stand down (see db.DB.dump)
+        self.epoch = 0
 
     # ------------------------------------------------------------------ reads
     def _live(self, entry, now):
@@ -87,6 +91,38 @@ class Data(MutableMapping):
         return len(self._storage)
 
     # ----------------------------------------------------------------- writes
+    def clear(self):
+        """Drop every key in place (FLUSHDB/FLUSHALL).
+
+        The store is emptied instead of being replaced by a fresh Data so
+        long-lived references - the snapshot dumper tasks in the servers
+        - keep pointing at the store they empty; the epoch bump makes
+        any snapshot taken before the flush fail its commit guard.
+        """
+        self._storage.clear()
+        self.epoch += 1
+
+    def snapshot(self):
+        """Consistent copy of every live key, safe to serialize off-loop.
+
+        Call it from the event-loop thread (the single mutator): each
+        stored container is duplicated, so later in-place command
+        mutations cannot tear the copy while a worker thread pickles it.
+        Expired corpses are dropped in the same pass, preserving the
+        sweep cadence the periodic dumps used to provide.
+        """
+        now = monotonic_ns_time()
+        out = {}
+        dead = []
+        for key, entry in self._storage.items():
+            if not self._live(entry, now):
+                dead.append(key)
+                continue
+            out[key] = _copy_value(entry["value"])
+        for key in dead:
+            del self._storage[key]
+        return out
+
     def set(self, key, value, wall_deadline_ns=None, keep_ttl=False):
         """Store a value like redis SET.
 
@@ -167,3 +203,19 @@ class Data(MutableMapping):
             return 0
         entry["expires_at"] = None
         return 1
+
+
+def _copy_value(value):
+    """Duplicate a stored value so later in-place command mutations cannot
+    affect a snapshot taken from the loop thread."""
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, dict):  # hash
+        return dict(value)
+    if isinstance(value, set):  # set
+        return set(value)
+    if isinstance(value, deque):  # list
+        return deque(value)
+    if type(value).__name__ == "BitMap":  # pyroaring, imported lazily
+        return value.copy()
+    return value

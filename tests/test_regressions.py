@@ -8,6 +8,14 @@
 - RESP framing (partial reads, pipelining, CRLF inside bulk values)
 - dispatch (unknown command / arity errors as -ERR replies)
 - sqlite snapshot replace semantics
+- value updates keep the TTL (INCR/APPEND/SETRANGE/LTRIM/LREM), only
+  the SET family clears it
+- empty sets/hashes never persist (SREM/SPOP/SMOVE/HDEL/*STORE)
+- FLUSHDB clears in place and stale snapshot commits stand down
+- redis string2ll integer parsing (no '+', whitespace, leading zeros,
+  64-bit range) and SCAN COUNT >= 1
+- bare keyless calls (DEL/MGET/KEYS/SADD/SREM/HDEL) are arity errors
+- SETBIT offset cap (512MB string limit)
 """
 
 from kagni.commands import Commands
@@ -1090,3 +1098,206 @@ def test_db_snapshot_replace_semantics():
                 assert db.load() == {}, backend
         finally:
             dbmod.apsw = real_apsw
+
+
+# ------------------------------------------- value updates keep the TTL (A2)
+def test_value_updates_preserve_ttl():
+    # redis keeps the TTL when a command updates a value in place; only
+    # the SET family (SET/GETSET/SETEX/...) clears it
+    c = _commands()
+    c.SET(b"k", b"1", b"EX", b"100")
+    c.INCR(b"k")
+    assert c.data.ttl(b"k") > 0
+    c.SET(b"a", b"abc", b"EX", b"100")
+    c.APPEND(b"a", b"x")
+    assert c.data.ttl(b"a") > 0
+    c.SET(b"r", b"abc", b"EX", b"100")
+    c.SETRANGE(b"r", b"1", b"X")
+    assert c.data.ttl(b"r") > 0
+    c.SET(b"f", b"1", b"EX", b"100")
+    c.INCRBYFLOAT(b"f", b"0.5")
+    assert c.data.ttl(b"f") > 0
+    c.SET(b"d", b"10", b"EX", b"100")
+    c.DECRBY(b"d", b"1")
+    assert c.data.ttl(b"d") > 0
+    # GETSET is part of the SET family: it clears the TTL
+    c2 = _commands()
+    c2.SET(b"g", b"abc", b"EX", b"100")
+    c2.GETSET(b"g", b"z")
+    assert c2.data.ttl(b"g") == -1
+
+
+def test_list_trims_preserve_ttl():
+    c = _commands()
+    c.RPUSH(b"l", b"a", b"b", b"c")
+    c.EXPIRE(b"l", b"100")
+    c.LTRIM(b"l", b"0", b"1")
+    assert c.data.ttl(b"l") > 0
+    c2 = _commands()
+    c2.RPUSH(b"l", b"a", b"b", b"a")
+    c2.EXPIRE(b"l", b"100")
+    c2.LREM(b"l", b"0", b"a")
+    assert c2.data.ttl(b"l") > 0
+    # removing the whole list deletes the key (and with it any TTL)
+    c3 = _commands()
+    c3.RPUSH(b"l", b"a")
+    c3.EXPIRE(b"l", b"100")
+    c3.LREM(b"l", b"0", b"a")
+    assert c3.EXISTS(b"l") == protocolBuilder(0)
+
+
+# --------------------------------------- empty collections never persist (A3)
+def test_empty_collections_are_deleted():
+    c = _commands()
+    c.SADD(b"s", b"a")
+    assert c.SREM(b"s", b"a") == protocolBuilder(1)
+    assert c.EXISTS(b"s") == protocolBuilder(0)
+
+    c2 = _commands()
+    c2.SADD(b"s", b"a", b"b")
+    assert sorted(protocolParser(c2.SPOP(b"s", b"5"))) == [b"a", b"b"]
+    assert c2.EXISTS(b"s") == protocolBuilder(0)
+
+    c3 = _commands()
+    c3.SADD(b"s", b"a")
+    assert c3.SPOP(b"s") == protocolBuilder(b"a")
+    assert c3.EXISTS(b"s") == protocolBuilder(0)
+
+    c4 = _commands()
+    c4.HSET(b"h", b"f", b"v")
+    assert c4.HDEL(b"h", b"f") == protocolBuilder(1)
+    assert c4.EXISTS(b"h") == protocolBuilder(0)
+
+    # a *STORE command whose result is empty deletes the destination,
+    # whatever kind it held before
+    c5 = _commands()
+    c5.SET(b"dst", b"old")
+    assert c5.SINTERSTORE(b"dst", b"missing", b"nope") == protocolBuilder(0)
+    assert c5.EXISTS(b"dst") == protocolBuilder(0)
+    assert c5.SUNIONSTORE(b"dst", b"missing") == protocolBuilder(0)
+    assert c5.EXISTS(b"dst") == protocolBuilder(0)
+    assert c5.SDIFFSTORE(b"dst", b"missing") == protocolBuilder(0)
+    assert c5.EXISTS(b"dst") == protocolBuilder(0)
+
+
+def test_smove_emptied_source_and_wrongtype_order():
+    c = _commands()
+    c.SADD(b"s", b"only")
+    assert c.SMOVE(b"s", b"t", b"only") == protocolBuilder(1)
+    assert c.EXISTS(b"s") == protocolBuilder(0)
+    assert c.SMEMBERS(b"t") == protocolBuilder([b"only"])
+
+    # a WRONGTYPE target errors before the member leaves the source
+    c2 = _commands()
+    c2.SADD(b"s", b"only")
+    c2.SET(b"t", b"str")
+    _expect_error(lambda: c2.SMOVE(b"s", b"t", b"only"), "WRONGTYPE")
+    assert c2.SMEMBERS(b"s") == protocolBuilder([b"only"])
+
+
+# ---------------------------------------- FLUSHDB and stale dumps (A1 + C1)
+def test_flushdb_clears_in_place_and_stale_dumps_stand_down():
+    import os
+    import tempfile
+
+    from kagni.db import DB
+
+    c = _commands()
+    c.SET(b"k", b"v")
+    data = c.data
+    assert c.FLUSHDB() == protocolBuilder(Response.OK)
+    # in-place clear: the dumper's reference to the store (and the one
+    # any test holds) sees the emptied state, not a swapped-in fresh Data
+    assert data is c.data and len(data) == 0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = DB(os.path.join(tmp, "k.sqlite"))
+        d = Data()
+        d[b"k"] = b"v"
+        stale = d.snapshot()  # taken by the dumper before the flush
+        epoch = d.epoch
+        d.clear()  # FLUSHDB on the loop
+        db.flush()  # FLUSHDB wipes the table
+        # the in-flight commit from before the flush lands afterwards:
+        # it must stand down, not resurrect the flushed key
+        db.dump(stale, d, epoch)
+        assert db.load() == {}
+        # a fresh snapshot still commits normally
+        db.dump(d.snapshot(), d, d.epoch)
+        assert db.load() == {}
+
+
+def test_snapshot_is_consistent_and_purges_corpses():
+    from collections import deque
+
+    d = Data()
+    d[b"bytes"] = b"v"
+    d[b"lst"] = deque([b"a", b"b"])
+    d[b"h"] = {b"f": b"x"}
+    d[b"s"] = {b"m"}
+    snap = d.snapshot()
+    # in-place command mutations after the snapshot must not tear it
+    d[b"lst"].append(b"c")
+    d[b"h"][b"g"] = b"y"
+    d[b"s"].add(b"n")
+    assert snap[b"lst"] == deque([b"a", b"b"])
+    assert snap[b"h"] == {b"f": b"x"}
+    assert snap[b"s"] == {b"m"}
+    # expired corpses are dropped by the snapshot pass and purged
+    d._storage[b"dead"] = {"value": b"x", "expires_at": 1}  # long past
+    assert b"dead" not in d.snapshot()
+    assert b"dead" not in d
+
+
+# ------------------------------------------------- integer parsing (A4/B)
+def test_integer_arguments_match_redis_parsing():
+    c = _commands()
+    # redis string2ll rejects '+', whitespace, underscores, leading zeros
+    # and anything outside the signed 64-bit range
+    for bad in (
+        b"+5", b" 5", b"5 ", b"1_0", b"007", b"-0",
+        b"9223372036854775808", b"99999999999999999999999999",
+    ):
+        _expect_error(lambda bad=bad: c.EXPIRE(b"k", bad))
+        _expect_error(lambda bad=bad: c.INCRBY(b"k", bad))
+        _expect_error(lambda bad=bad: c.GETRANGE(b"k", bad, b"0"))
+    # valid forms keep working, including the int64 minimum
+    assert c.EXPIRE(b"k", b"-5") == protocolBuilder(0)  # missing key
+    c.INCRBY(b"n", b"-9223372036854775808")  # int64 minimum parses
+    _expect_error(lambda: c.INCRBY(b"n", b"-1"))  # stepping below overflows
+
+
+def test_scan_count_positive_only_and_strict_cursor():
+    c = _commands()
+    err = _expect_error(lambda: c.SCAN(b"0", b"COUNT", b"0"))
+    assert err.message == "syntax error", err.message
+    _expect_error(lambda: c.SCAN(b"0", b"COUNT", b"-1"))
+    _expect_error(lambda: c.SCAN(b"0", b"COUNT", b"007"))
+    err = _expect_error(lambda: c.SCAN(b"007"))
+    assert err.message == "invalid cursor", err.message
+    _expect_error(lambda: c.SCAN(b"+0"))
+    assert c.SCAN(b"0", b"COUNT", b"2") == protocolBuilder([b"0", []])
+
+
+# ------------------------------------------- bare keyless calls (B)
+def test_bare_keyless_calls_are_arity_errors():
+    c = _commands()
+    for name in (b"DEL", b"MGET", b"KEYS", b"SADD", b"SREM", b"HDEL"):
+        args = [b"k"] if name in (b"SADD", b"SREM", b"HDEL") else []
+        assert b"wrong number of arguments" in c.dispatch([name] + args), name
+    # a bare SADD must not create a live empty set
+    c2 = _commands()
+    assert b"wrong number of arguments" in c2.dispatch([b"SADD", b"k"])
+    assert c2.EXISTS(b"k") == protocolBuilder(0)
+
+
+# ------------------------------------------------------------ bit offsets
+def test_setbit_offset_cap():
+    try:
+        import pyroaring  # noqa: F401
+    except ImportError:
+        return
+    c = _commands()
+    err = _expect_error(lambda: c.SETBIT(b"k", b"4294967296", b"1"))
+    assert err.message == "bit offset is not an integer or out of range"
+    assert c.SETBIT(b"k", b"4294967295", b"1") == protocolBuilder(0)
