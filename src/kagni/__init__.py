@@ -13,4 +13,4 @@ try:
 
     __version__ = _version("kagni")
 except Exception:  # pragma: no cover - bare checkout without installation
-    __version__ = "0.8.2"
+    __version__ = "0.9.0"
