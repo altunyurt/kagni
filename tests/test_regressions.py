@@ -1852,3 +1852,52 @@ def test_hrandfield():
     _expect_error(lambda: c.HRANDFIELD(b"h", b"WITHVALUES"))  # count expected
     c.SET(b"str", b"x")
     _expect_error(lambda: c.HRANDFIELD(b"str"), "WRONGTYPE")
+
+
+# --------------------------------------------------------------- LCS
+def test_lcs():
+    c = _commands()
+    c.SET(b"a", b"ohmytext")
+    c.SET(b"b", b"mynewtext")
+    assert c.LCS(b"a", b"b") == protocolBuilder(b"mytext")
+    assert c.LCS(b"a", b"b", b"LEN") == protocolBuilder(6)
+    # IDX replies [matches, [[a-range, b-range]...], len, length] with
+    # the matches in end-to-start order
+    assert protocolParser(c.LCS(b"a", b"b", b"IDX")) == [
+        b"matches",
+        [[[4, 7], [5, 8]], [[2, 3], [0, 1]]],
+        b"len",
+        6,
+    ]
+    withlen = protocolParser(c.LCS(b"a", b"b", b"IDX", b"WITHMATCHLEN"))
+    assert withlen[1] == [[[4, 7], [5, 8], 4], [[2, 3], [0, 1], 2]]
+    # MINMATCHLEN filters short matches out of the IDX reply only
+    filtered = protocolParser(c.LCS(b"a", b"b", b"IDX", b"MINMATCHLEN", b"3"))
+    assert filtered == [b"matches", [[[4, 7], [5, 8]]], b"len", 6]
+    # ... and is ignored (like WITHMATCHLEN) without IDX
+    assert c.LCS(b"a", b"b", b"MINMATCHLEN", b"3") == protocolBuilder(b"mytext")
+    assert c.LCS(b"a", b"b", b"WITHMATCHLEN") == protocolBuilder(b"mytext")
+    err = _expect_error(lambda: c.LCS(b"a", b"b", b"LEN", b"IDX"))
+    assert err.message == "If you want both the length and indexes, please just use IDX."
+    # MINMATCHLEN clamps 0/negative to 1, junk errors
+    assert protocolParser(c.LCS(b"a", b"b", b"IDX", b"MINMATCHLEN", b"0"))[1] == [
+        [[4, 7], [5, 8]], [[2, 3], [0, 1]]
+    ]
+    _expect_error(lambda: c.LCS(b"a", b"b", b"IDX", b"MINMATCHLEN", b"x"))
+    _expect_error(lambda: c.LCS(b"a", b"b", b"BOGUS"))
+    # missing keys behave like empty strings
+    assert c.LCS(b"a", b"nok") == protocolBuilder(b"")
+    assert c.LCS(b"nok", b"b", b"LEN") == protocolBuilder(0)
+    assert protocolParser(c.LCS(b"nok", b"nok2", b"IDX")) == [
+        b"matches", [], b"len", 0
+    ]
+    # ambiguous alignments pick the same path as redis (tie-break)
+    c.SET(b"u1", b"ab")
+    c.SET(b"u2", b"ba")
+    assert c.LCS(b"u1", b"u2") == protocolBuilder(b"a")
+    assert c.LCS(b"u1", b"u2", b"IDX") == protocolBuilder(
+        [b"matches", [[[0, 0], [1, 1]]], b"len", 1]
+    )
+    c.RPUSH(b"l", b"x")  # a list is the wrong kind for LCS
+    _expect_error(lambda: c.LCS(b"a", b"l"), "WRONGTYPE")
+    _expect_error(lambda: c.LCS(b"l", b"a", b"IDX"), "WRONGTYPE")

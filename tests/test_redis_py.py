@@ -282,3 +282,17 @@ def test_sintercard_and_hrandfield(r):
     assert sorted(picked[1::2]) == [b"1", b"2", b"3"]
     assert r.hrandfield("noh") is None
     assert r.hrandfield("noh", 2) == []
+
+
+def test_lcs(r):
+    r.set("a", "ohmytext")
+    r.set("b", "mynewtext")
+    assert r.lcs("a", "b") == b"mytext"
+    assert r.lcs("a", "b", len=True) == 6
+    reply = r.lcs("a", "b", idx=True)  # flat [matches, ...] reply
+    assert reply[1] == [[[4, 7], [5, 8]], [[2, 3], [0, 1]]]
+    assert reply[3] == 6
+    assert r.lcs("a", "b", idx=True, minmatchlen=3)[1] == [[[4, 7], [5, 8]]]
+    assert r.lcs("a", "b", idx=True, withmatchlen=True)[1] == [
+        [[4, 7], [5, 8], 4], [[2, 3], [0, 1], 2]
+    ]

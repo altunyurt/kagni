@@ -84,7 +84,7 @@ _WRITE_COMMANDS = frozenset(
 # read-only commands never modify the keyspace; the rest (PING, CLIENT,
 # MULTI, ...) carry no flag at all, like redis' non-readonly flags
 _READONLY_COMMANDS = frozenset(
-    b"get mget strlen getrange substr exists type ttl pttl keys scan dbsize touch expiretime pexpiretime "
+    b"get mget strlen getrange substr lcs exists type ttl pttl keys scan dbsize touch expiretime pexpiretime "
     b"echo config info command "
     b"getbit bitcount bitpos hscan sscan zscan "
     b"llen lindex lrange lpos "
@@ -800,6 +800,139 @@ class CommandSetMixin:
     @command_decorator(b"DECR")
     def DECR(self, key: bytes) -> int:
         return self._bump(key, -1)
+
+    # ------------------------------------------------------------ longest
+    # common subsequence (LCS)
+    def _lcs_runs(self, a, b, prefer_up=True):
+        """(length, matches) of the LCS of bytes strings *a*/*b*.
+
+        The classic DP runs in O(n*m) time and memory (one direction
+        byte per cell, like redis' own lcs matrix).  Matches are the
+        maximal diagonal runs of one optimal path, in end-to-start
+        order like redis, each as (a_start, a_end, b_start, b_end)
+        inclusive.  *prefer_up* picks the tie-break when both moves
+        keep the length: empirical differential runs showed redis moves
+        up (i) first.
+        """
+        n, m = len(a), len(b)
+        if not n or not m:
+            return 0, []
+        prev = [0] * (m + 1)
+        dirs = [None] * (n + 1)  # per row: 1 diag, 2 up, 3 left
+        for i in range(1, n + 1):
+            cur = [0] * (m + 1)
+            drow = bytearray(m + 1)
+            ai = a[i - 1]
+            for j in range(1, m + 1):
+                if ai == b[j - 1]:
+                    cur[j] = prev[j - 1] + 1
+                    drow[j] = 1
+                elif (prev[j] > cur[j - 1]) or (
+                    prefer_up and prev[j] == cur[j - 1]
+                ):
+                    cur[j] = prev[j]
+                    drow[j] = 2
+                else:
+                    cur[j] = cur[j - 1]
+                    drow[j] = 3
+            dirs[i] = drow
+            prev = cur
+        length = prev[m]
+
+        i, j = n, m
+        matches = []
+        run = None  # (a_hi, b_hi, cells): highest indexes of the run
+        while i > 0 and j > 0:
+            d = dirs[i][j]
+            if d == 1:
+                i -= 1
+                j -= 1
+                if run is None:
+                    run = (i, j, 1)
+                else:
+                    run = (run[0], run[1], run[2] + 1)
+            else:
+                if run is not None:
+                    a_hi, b_hi, cells = run
+                    matches.append(
+                        (a_hi - cells + 1, a_hi, b_hi - cells + 1, b_hi)
+                    )
+                    run = None
+                if d == 2:
+                    i -= 1
+                else:
+                    j -= 1
+        if run is not None:
+            a_hi, b_hi, cells = run
+            matches.append((a_hi - cells + 1, a_hi, b_hi - cells + 1, b_hi))
+        return length, matches
+
+    def _lcs_command(self, key1, key2, options):
+        len_only = False
+        idx = False
+        min_match_len = 1
+        with_match_len = False
+        j = 0
+        while j < len(options):
+            opt = options[j].upper()
+            if opt == b"LEN":
+                len_only = True
+                j += 1
+            elif opt == b"IDX":
+                idx = True
+                j += 1
+            elif opt == b"MINMATCHLEN" and j + 1 < len(options):
+                try:
+                    min_match_len = string2ll(options[j + 1])
+                except ValueError:
+                    raise Errors.NOT_INT
+                if min_match_len < 1:
+                    min_match_len = 1  # redis clamps negatives and 0
+                j += 2
+            elif opt == b"WITHMATCHLEN":
+                with_match_len = True
+                j += 1
+            else:
+                raise Errors.SYNTAX
+        if len_only and idx:
+            raise Error(
+                "ERR", "If you want both the length and indexes, please just use IDX."
+            )
+        # MINMATCHLEN / WITHMATCHLEN only shape the IDX reply; without
+        # IDX redis ignores them
+
+        val1 = self._string(key1)
+        val2 = self._string(key2)
+        a = val1 if val1 is not None else b""
+        b = val2 if val2 is not None else b""
+
+        if len_only:
+            length, _ = self._lcs_runs(a, b)
+            return length
+        if not idx:
+            # full traceback for the subsequence itself
+            length, matches = self._lcs_runs(a, b)
+            if not matches:
+                return b""
+            # matches come end-to-start: rebuild the subsequence from the
+            # first match forwards
+            return b"".join(a[a1:a2 + 1] for a1, a2, _, _ in reversed(matches))
+        length, matches = self._lcs_runs(a, b)
+        reply_matches = []
+        for a1, a2, b1, b2 in matches:
+            if a2 - a1 + 1 < min_match_len:
+                continue
+            match = [[a1, a2], [b1, b2]]
+            if with_match_len:
+                match.append(a2 - a1 + 1)
+            reply_matches.append(match)
+        return [b"matches", reply_matches, b"len", length]
+
+    @command_decorator(b"LCS")
+    def LCS(self, key1: bytes, key2: bytes, *options: bytes):
+        """LCS key1 key2 [LEN | IDX [MINMATCHLEN len] [WITHMATCHLEN]]:
+        longest common subsequence of the two string values."""
+        return self._lcs_command(key1, key2, options)
 
     # -------------------------------------------------------------- ranges
     @command_decorator(b"SUBSTR")
