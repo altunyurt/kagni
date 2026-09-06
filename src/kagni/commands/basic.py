@@ -71,12 +71,12 @@ TYPE_NAMES = {
 _WRITE_COMMANDS = frozenset(
     b"append decr decrby del expire expireat getdel getex getset incr "
     b"incrby incrbyfloat mset msetnx persist pexpire pexpireat psetex set "
-    b"hmset hsetnx hincrbyfloat "
+    b"hmset hsetnx hincrbyfloat hexpire hpexpire hexpireat hpexpireat "
     b"setex setnx setrange setbit bitop bitfield "
     b"linsert lmove lmpop lpop lpush lpushx lrem lset ltrim rpop rpoplpush "
     b"rpush rpushx "
     b"sadd sdiffstore sinterstore smove spop srem sunionstore "
-    b"hdel hincrby hset "
+    b"hdel hincrby hset hpersist "
     b"zadd zdiffstore zincrby zinterstore zpopmax zpopmin zrem "
     b"zremrangebylex zremrangebyrank zremrangebyscore zunionstore "
     b"flushall flushdb".split()
@@ -89,7 +89,7 @@ _READONLY_COMMANDS = frozenset(
     b"getbit bitcount bitpos bitfield_ro hscan sscan zscan "
     b"llen lindex lrange lpos "
     b"scard sdiff sinter sintercard sismember smembers smismember srandmember sscan sunion "
-    b"hget hmget hexists hlen hkeys hvals hgetall hscan hstrlen hrandfield "
+    b"hget hmget hexists hlen hkeys hvals hgetall hscan hstrlen hrandfield httl hpttl hexpiretime hpexpiretime "
     b"zcard zcount zdiff zinter zlexcount zmscore zrandmember zrange "
     b"zrangebylex zrangebyscore zrank zrevrange zrevrangebylex "
     b"zrevrangebyscore zrevrank zscore zunion zscan".split()
@@ -123,6 +123,9 @@ _COMMAND_GROUPS = {
     b"hexists": "hash", b"hdel": "hash", b"hlen": "hash",
     b"hkeys": "hash", b"hvals": "hash", b"hgetall": "hash",
     b"hincrby": "hash", b"hincrbyfloat": "hash", b"hstrlen": "hash",
+    b"hexpire": "hash", b"hpexpire": "hash", b"hexpireat": "hash", b"hpexpireat": "hash",
+    b"hpersist": "hash", b"httl": "hash", b"hpttl": "hash",
+    b"hexpiretime": "hash", b"hpexpiretime": "hash",
     b"zadd": "sorted-set", b"zcard": "sorted-set",
     b"zscore": "sorted-set", b"zmscore": "sorted-set",
     b"zincrby": "sorted-set", b"zrank": "sorted-set",

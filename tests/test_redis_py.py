@@ -306,3 +306,26 @@ def test_bitfield(r):
     op = r.bitfield("bf2")
     op.overflow("SAT").incrby("u8", 0, 300).get("u8", 0)
     assert op.execute() == [255, 255]
+
+
+def test_hash_field_expiries(r):
+    r.hset("h", mapping={"f": "v", "g": "w"})
+    assert r.hexpire("h", 100, "f", "g") == [1, 1]
+    ttl = r.httl("h", "f")[0]
+    assert 0 < ttl <= 100
+    assert 0 < r.hpttl("h", "f")[0] <= 100000
+    assert r.hpersist("h", "f") == [1]
+    assert r.httl("h", "f", "g") == [-1, 100]
+    assert r.hexpiretime("h", "g")[0] > 0
+    assert r.hpexpiretime("h", "f")[0] == -1
+    # HSET clears the field TTL, HINCRBY keeps it
+    assert r.hexpire("h", 100, "g") == [1]
+    r.hset("h", "g", "w2")
+    assert r.httl("h", "g") == [-1]
+    r.hset("h", "num", 1)
+    r.hexpire("h", 100, "num")
+    r.hincrby("h", "num", 1)
+    assert r.httl("h", "num")[0] > 0
+    # a past deadline deletes the field
+    assert r.hexpireat("h", 1, "num") == [2]
+    assert r.hexists("h", "num") == 0

@@ -1980,3 +1980,131 @@ def test_bitfield_errors_and_ro():
     assert c.BITFIELD_RO(b"k", b"OVERFLOW", b"WRAP", b"GET", b"u8", b"0") == protocolBuilder([65])
     c.SET(b"s", b"x")  # kagni's bitmap/string split: WRONGTYPE like SETBIT
     _expect_error(lambda: c.BITFIELD(b"s", b"GET", b"u8", b"0"), "WRONGTYPE")
+
+
+# ------------------------------------------- hash field-level expiries
+def test_hexpire_family_basics():
+    c = _commands()
+    c.HSET(b"h", b"f", b"v", b"g", b"w")
+    # setters reply per-field arrays; 1 = set, 0 = flag-blocked,
+    # 2 = deleted by a past/zero deadline, -2 = missing field
+    assert c.HEXPIRE(b"h", b"100", b"FIELDS", b"2", b"f", b"g") == protocolBuilder([1, 1])
+    ttl = protocolParser(c.HTTL(b"h", b"FIELDS", b"1", b"f"))
+    assert 0 < ttl[0] <= 100
+    ms = protocolParser(c.HPTTL(b"h", b"FIELDS", b"1", b"f"))
+    assert 0 < ms[0] <= 100000
+    assert c.HPERSIST(b"h", b"FIELDS", b"2", b"f", b"g") == protocolBuilder([1, 1])
+    assert c.HTTL(b"h", b"FIELDS", b"2", b"f", b"g") == protocolBuilder([-1, -1])
+    # no-ttl fields answer -1 to every reader; missing fields/keys -2
+    assert c.HTTL(b"h", b"FIELDS", b"1", b"f") == protocolBuilder([-1])
+    assert c.HPTTL(b"h", b"FIELDS", b"1", b"f") == protocolBuilder([-1])
+    assert c.HPERSIST(b"h", b"FIELDS", b"1", b"f") == protocolBuilder([-1])
+    assert c.HEXPIRETIME(b"h", b"FIELDS", b"1", b"f") == protocolBuilder([-1])
+    assert c.HPEXPIRETIME(b"h", b"FIELDS", b"1", b"f") == protocolBuilder([-1])
+    assert c.HTTL(b"h", b"FIELDS", b"1", b"nope") == protocolBuilder([-2])
+    assert c.HTTL(b"noh", b"FIELDS", b"1", b"f") == protocolBuilder([-2])
+    assert c.HEXPIRE(b"noh", b"5", b"FIELDS", b"1", b"x") == protocolBuilder([-2])
+    # absolute deadlines are reported back
+    c.HEXPIREAT(b"h", b"9999999999", b"FIELDS", b"1", b"g")
+    assert c.HEXPIRETIME(b"h", b"FIELDS", b"1", b"g") == protocolBuilder([9999999999])
+    # a past deadline deletes the field and answers 2
+    assert c.HEXPIREAT(b"h", b"1", b"FIELDS", b"1", b"g") == protocolBuilder([2])
+    assert c.HEXISTS(b"h", b"g") == protocolBuilder(0)
+    assert c.HGETALL(b"h") == protocolBuilder([b"f", b"v"])
+
+
+def test_hexpire_flags_and_interplay():
+    c = _commands()
+    c.HSET(b"h", b"f", b"v", b"n", b"5", b"g", b"w")
+    c.HEXPIRE(b"h", b"100", b"FIELDS", b"1", b"f")
+    assert c.HEXPIRE(b"h", b"50", b"NX", b"FIELDS", b"1", b"f") == protocolBuilder([0])
+    assert c.HEXPIRE(b"h", b"50", b"NX", b"FIELDS", b"1", b"n") == protocolBuilder([1])
+    assert c.HEXPIRE(b"h", b"200", b"XX", b"FIELDS", b"1", b"f") == protocolBuilder([1])
+    # XX on a live field without a TTL is blocked; on a missing field -2
+    assert c.HEXPIRE(b"h", b"200", b"XX", b"FIELDS", b"1", b"g") == protocolBuilder([0])
+    assert c.HEXPIRE(b"h", b"200", b"XX", b"FIELDS", b"1", b"absent") == protocolBuilder([-2])
+    assert c.HEXPIRE(b"h", b"300", b"GT", b"FIELDS", b"1", b"f") == protocolBuilder([1])
+    assert c.HEXPIRE(b"h", b"10", b"GT", b"FIELDS", b"1", b"f") == protocolBuilder([0])
+    assert c.HEXPIRE(b"h", b"10", b"LT", b"FIELDS", b"1", b"f") == protocolBuilder([1])
+    # expired/missing fields answer -2 regardless of flags
+    assert c.HEXPIRE(b"h", b"5", b"GT", b"FIELDS", b"1", b"absent") == protocolBuilder([-2])
+    # HSET clears the field TTL; HINCRBY/HINCRBYFLOAT keep it
+    c.HEXPIRE(b"h", b"100", b"FIELDS", b"1", b"f")
+    c.HSET(b"h", b"f", b"v2")
+    assert c.HTTL(b"h", b"FIELDS", b"1", b"f") == protocolBuilder([-1])
+    c.HEXPIRE(b"h", b"100", b"FIELDS", b"1", b"n")
+    c.HINCRBY(b"h", b"n", b"1")
+    assert c.HTTL(b"h", b"FIELDS", b"1", b"n") != protocolBuilder([-1])
+    c.HINCRBYFLOAT(b"h", b"n", b"0.5")
+    assert c.HTTL(b"h", b"FIELDS", b"1", b"n") != protocolBuilder([-1])
+    # zero and past deadlines delete (reply 2); negative times error
+    c.HEXPIRE(b"h", b"100", b"FIELDS", b"1", b"g")
+    assert c.HEXPIRE(b"h", b"0", b"FIELDS", b"1", b"g") == protocolBuilder([2])
+    err = _expect_error(lambda: c.HEXPIRE(b"h", b"-1", b"FIELDS", b"1", b"g"))
+    assert err.message == "invalid expire time, must be >= 0", err.message
+    err = _expect_error(lambda: c.HEXPIRE(b"h", b"x", b"FIELDS", b"1", b"g"))
+    assert err.message == "value is not an integer or out of range"
+    err = _expect_error(lambda: c.HEXPIRE(b"h", b"1", b"FIELDS", b"x", b"g"))
+    assert err.message == "Parameter `numFields` should be greater than 0"
+    assert b"wrong number of arguments" in c.dispatch([b"HEXPIRE", b"h", b"5"])
+    assert b"wrong number of arguments" in c.dispatch([b"HEXPIRE", b"h", b"5", b"FIELDS", b"0"])
+    err = _expect_error(lambda: c.HEXPIRE(b"h", b"1", b"FIELDS", b"2", b"g"))
+    assert "must match the number of arguments" in err.message
+    err = _expect_error(lambda: c.HEXPIRE(b"h", b"1", b"FIELDS", b"1", b"g", b"extra"))
+    assert "must match the number of arguments" in err.message
+    err = _expect_error(lambda: c.HEXPIRE(b"h", b"5", b"NX", b"XX", b"FIELDS", b"1", b"g"))
+    assert "FIELDS is missing or not at the right position" in err.message
+    # readers share the grammar but have their own wording
+    err = _expect_error(lambda: c.HTTL(b"h", b"FIELDS", b"x", b"g"))
+    assert err.message == "Number of fields must be a positive integer"
+    assert b"wrong number of arguments" in c.dispatch([b"HTTL", b"h"])
+    assert b"wrong number of arguments" in c.dispatch([b"HTTL", b"h", b"FIELDS", b"0"])
+    err = _expect_error(lambda: c.HTTL(b"h", b"FIELDS", b"1", b"g", b"extra"))
+    assert "must match the number of arguments" in err.message
+    # wrong types raise WRONGTYPE
+    c.SET(b"str", b"x")
+    _expect_error(lambda: c.HEXPIRE(b"str", b"5", b"FIELDS", b"1", b"f"), "WRONGTYPE")
+    _expect_error(lambda: c.HTTL(b"str", b"FIELDS", b"1", b"f"), "WRONGTYPE")
+
+
+def test_hexpire_expiry_ceiling():
+    c = _commands()
+    c.HSET(b"h", b"f", b"v")
+    # absolute timestamps above 2**46 - 1 ms are rejected
+    err = _expect_error(lambda: c.HEXPIREAT(b"h", b"70368744177664", b"FIELDS", b"1", b"f"))
+    assert err.message == "invalid expire time in 'hexpireat' command"
+    _expect_error(lambda: c.HPEXPIREAT(b"h", b"70368744177664", b"FIELDS", b"1", b"f"))
+    # seconds-scale overflow
+    _expect_error(lambda: c.HEXPIRE(b"h", b"70368744177664", b"FIELDS", b"1", b"f"))
+    _expect_error(lambda: c.HEXPIREAT(b"h", b"70368744178", b"FIELDS", b"1", b"f"))
+
+
+def test_expired_fields_vanish_and_hash_ttl_persists():
+    import time as _wall
+
+    # an expired field is invisible everywhere and the emptied hash key
+    # disappears
+    d = Data()
+    d[b"h"] = {b"f": (b"v", _wall.time_ns() - 1)}  # deadline in the past
+    d[b"h"][b"live"] = b"x"
+    c = Commands(data=d)
+    assert c.HLEN(b"h") == protocolBuilder(1)
+    assert c.HGET(b"h", b"f") == protocolBuilder(Response.NIL)
+    assert c.HGETALL(b"h") == protocolBuilder([b"live", b"x"])
+    assert c.HTTL(b"h", b"FIELDS", b"1", b"f") == protocolBuilder([-2])
+    # HSET over an expired field counts as a brand-new field
+    assert c.HSET(b"h", b"f", b"fresh") == protocolBuilder(1)
+    assert c.HGETALL(b"h") == protocolBuilder([b"live", b"x", b"f", b"fresh"])
+    # a snapshot keeps field deadlines (stored wall-clock) and restores
+    # them as-is
+    d2 = Data()
+    d2[b"h"] = {b"ttl": (b"v", _wall.time_ns() + 60 * 10 ** 9)}
+    restored = Data()
+    restored.restore(d2.snapshot())
+    c2 = Commands(data=restored)
+    assert protocolParser(c2.HTTL(b"h", b"FIELDS", b"1", b"ttl"))[0] > 0
+    # key-level expiry still works on hashes with field TTLs
+    c3 = Commands(data=Data())
+    c3.HSET(b"h", b"f", b"v")
+    c3.EXPIRE(b"h", b"100")
+    assert c3.data.ttl(b"h") > 0
