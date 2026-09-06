@@ -122,6 +122,22 @@ both RESP parsers random bytes (`tests/test_fuzz.py`: only a clean
 container.  Known gaps, intentionally left
 open:
 
+### Integration tests without a redis
+
+For tests that need a live endpoint, `kagni.testing` provides a
+session-scoped pytest fixture that boots a real server on an ephemeral
+port (in-memory, nothing on disk) and tears it down afterwards:
+
+    # tests/conftest.py
+    pytest_plugins = ["kagni.testing"]
+
+    def test_cache(kagni_server):
+        r = redis.Redis(host=kagni_server.host, port=kagni_server.port)
+        assert r.set("k", "v") and r.get("k") == b"v"
+
+`kagni.testing.start_server()` is the fixture-free version (use it as a
+context manager for your own function-scoped fixtures).
+
 - **The differential battery needs a redis binary**, so it only runs in
   the CI job that hosts one; by hand:
   `KAGNI_DIFF_REDIS=host:port python tests/differential.py`.
