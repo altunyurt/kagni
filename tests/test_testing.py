@@ -29,12 +29,13 @@ def test_kagni_server_fixture(kagni_server):
     # a real server answers over a real socket: full wire round-trips
     replies = _pipeline(
         kagni_server,
+        (b"FLUSHDB",),  # other suites share the session store
         (b"PING",),
         (b"SET", b"k", b"v"),
         (b"GET", b"k"),
         (b"DBSIZE",),
     )
-    assert replies == b"+PONG\r\n+OK\r\n$1\r\nv\r\n:1\r\n", replies
+    assert replies == b"+OK\r\n+PONG\r\n+OK\r\n$1\r\nv\r\n:1\r\n", replies
     count = int(_pipeline(kagni_server, (b"COMMAND", b"COUNT")).strip(b":\r\n"))
     assert count > 100
 

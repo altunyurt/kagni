@@ -85,13 +85,13 @@ _WRITE_COMMANDS = frozenset(
 _READONLY_COMMANDS = frozenset(
     b"get mget strlen getrange exists type ttl pttl keys scan dbsize touch "
     b"echo config info command "
-    b"getbit bitcount bitpos "
+    b"getbit bitcount bitpos hscan sscan zscan "
     b"llen lindex lrange lpos "
-    b"scard sdiff sinter sismember smembers srandmember sunion "
-    b"hget hmget hexists hlen hkeys hvals hgetall "
+    b"scard sdiff sinter sismember smembers srandmember sscan sunion "
+    b"hget hmget hexists hlen hkeys hvals hgetall hscan "
     b"zcard zcount zdiff zinter zlexcount zmscore zrandmember zrange "
     b"zrangebylex zrangebyscore zrank zrevrange zrevrangebylex "
-    b"zrevrangebyscore zrevrank zscore zunion".split()
+    b"zrevrangebyscore zrevrank zscore zunion zscan".split()
 )
 _ADMIN_COMMANDS = frozenset(b"flushall flushdb config".split())
 

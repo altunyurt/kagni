@@ -216,3 +216,18 @@ def test_resp3_probe_fails_cleanly(kagni_server):
         assert "NOPROTO" in str(exc.value)
     finally:
         client.close()
+
+
+def test_scan_iters(r):
+    r.hset("h", mapping={"a": "1", "b": "2", "c": "3"})
+    assert dict(r.hscan_iter("h")) == {b"a": b"1", b"b": b"2", b"c": b"3"}
+    assert dict(r.hscan_iter("h", match="a*")) == {b"a": b"1"}
+    r.sadd("s", "x", "y", "z")
+    assert set(r.sscan_iter("s")) == {b"x", b"y", b"z"}
+    assert set(r.sscan_iter("s", match="x*")) == {b"x"}
+    r.zadd("z", {"m1": 1, "m2": 2})
+    assert dict(r.zscan_iter("z")) == {b"m1": 1.0, b"m2": 2.0}
+    # empty collections iterate cleanly
+    assert list(r.hscan_iter("noh")) == []
+    assert list(r.sscan_iter("nos")) == []
+    assert list(r.zscan_iter("noz")) == []

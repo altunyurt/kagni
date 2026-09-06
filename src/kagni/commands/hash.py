@@ -6,7 +6,10 @@ from .common import (
     INT64_MIN,
     KIND_HASH,
     RE_NUMERIC,
+    compile_glob,
     expect_kind,
+    parse_scan_cursor,
+    parse_scan_options,
 )
 from .decorator import command_decorator
 
@@ -102,6 +105,25 @@ class CommandSetMixin:
         if cur is None:
             return []
         return [b for a in cur.items() for b in a]
+
+    @command_decorator(b"HSCAN")
+    def HSCAN(self, key: bytes, cursor: bytes, *options: bytes):
+        """HSCAN key cursor [MATCH pattern] [COUNT n]: one step, like
+        SCAN - cursor 0 returns every matching field/value pair and
+        cursor 0 again, so keys present for the whole scan are returned
+        at least once."""
+        parse_scan_cursor(cursor)  # validates, redis' "invalid cursor"
+        pattern = parse_scan_options(options)
+        rgx = compile_glob(pattern)
+        cur = self._hash(key)
+        if cur is None:
+            return [b"0", []]
+        out = []
+        for field, value in cur.items():
+            if rgx is not None and not rgx.match(field):
+                continue
+            out.extend((field, value))
+        return [b"0", out]
 
     @command_decorator(b"HINCRBY")
     def HINCRBY(self, key: bytes, field: bytes, increment: int) -> int:

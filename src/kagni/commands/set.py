@@ -4,7 +4,14 @@ from operator import and_, or_, sub
 from typing import List
 
 from kagni.constants import Errors, Response
-from .common import KIND_SET, expect_kind, kind_of
+from .common import (
+    KIND_SET,
+    compile_glob,
+    expect_kind,
+    kind_of,
+    parse_scan_cursor,
+    parse_scan_options,
+)
 from .decorator import command_decorator
 
 __all__ = ["CommandSetMixin"]
@@ -120,6 +127,20 @@ class CommandSetMixin:
         sets = self._sets(keys)
         result = reduce(and_, sets[1:], set(sets[0]) if sets else set())
         return self._store_result(target, result)
+
+    @command_decorator(b"SSCAN")
+    def SSCAN(self, key: bytes, cursor: bytes, *options: bytes):
+        """SSCAN key cursor [MATCH pattern] [COUNT n]: one step, like
+        SCAN (cursor 0 returns every matching member and cursor 0
+        again)."""
+        parse_scan_cursor(cursor)  # validates, redis' "invalid cursor"
+        pattern = parse_scan_options(options)
+        rgx = compile_glob(pattern)
+        cur = self._set(key)
+        if cur is None:
+            return [b"0", []]
+        out = [member for member in cur if rgx is None or rgx.match(member)]
+        return [b"0", out]
 
     @command_decorator(b"SISMEMBER")
     def SISMEMBER(self, key: bytes, val: bytes) -> int:

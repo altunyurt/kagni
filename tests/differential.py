@@ -14,6 +14,8 @@ stream mirrors the redis 7.4 semantics kagni targets (verified against
 import os
 import re
 import socket
+
+from kagni.resp import RESPReader
 import subprocess
 import sys
 import time
@@ -38,6 +40,26 @@ KAGNI_PORT = free_port()
 
 BATCHES = [
     [(b"FLUSHALL",)],
+    # ---- collection scans
+    [(b"HSET", b"h", b"f1", b"v1", b"f2", b"v2", b"other", b"x"),
+     (b"HSCAN", b"h", b"0"), (b"HSCAN", b"h", b"0", b"MATCH", b"f*"),
+     (b"HSCAN", b"h", b"0", b"COUNT", b"1"), (b"HSCAN", b"h", b"7"),
+     (b"HSCAN", b"h", b"7", b"MATCH", b"nope*"), (b"HSCAN", b"h", b"0", b"MATCH", b"nomatch"),
+     (b"HSCAN", b"noh", b"0"), (b"HSCAN", b"noh", b"5", b"MATCH", b"f*"),
+     (b"HSCAN", b"h", b"abc"), (b"HSCAN", b"h", b"-1"),
+     (b"HSCAN", b"h", b"0", b"COUNT", b"0"), (b"HSCAN", b"h", b"0", b"COUNT", b"-2"),
+     (b"HSCAN", b"h", b"0", b"COUNT", b"x"), (b"HSCAN", b"h", b"0", b"BOGUS", b"1"),
+     (b"HSCAN", b"h", b"0", b"MATCH"), (b"HSCAN", b"h", b"0", b"TYPE", b"hash"),
+     (b"SADD", b"s", b"aa", b"ab", b"bb"), (b"SSCAN", b"s", b"0"),
+     (b"SSCAN", b"s", b"0", b"MATCH", b"a*"), (b"SSCAN", b"s", b"0", b"MATCH", b"a*", b"COUNT", b"1"),
+     (b"SSCAN", b"nos", b"0"), (b"SSCAN", b"s", b"3"), (b"SSCAN", b"s", b"abc"),
+     (b"ZADD", b"z", b"1", b"m1", b"2", b"m2", b"3", b"other"),
+     (b"ZSCAN", b"z", b"0"), (b"ZSCAN", b"z", b"0", b"MATCH", b"m*"),
+     (b"ZSCAN", b"z", b"0", b"MATCH", b"m*", b"COUNT", b"2"),
+     (b"ZSCAN", b"noz", b"0"), (b"ZSCAN", b"z", b"0", b"MATCH", b"x*"),
+     (b"ZSCAN", b"z", b"0", b"MATCH"), (b"ZSCAN", b"z", b"9"),
+     (b"HSET", b"str", b"f", b"v"), (b"HSCAN", b"str", b"0"),
+     (b"SSCAN", b"str", b"0"), (b"ZSCAN", b"str", b"0")],
     # ---- zadd options / replies
     [(b"ZADD", b"k", b"1", b"a"), (b"ZADD", b"k", b"NX", b"2", b"a"),
      (b"ZADD", b"k", b"XX", b"3", b"a"), (b"ZADD", b"k", b"XX", b"9", b"nope"),
@@ -208,51 +230,65 @@ def ask(host, port, cmds):
     return out
 
 
+def _frame_end(buf, pos):
+    """Position right after the RESP value starting at *pos*, or None
+    when the buffer ends mid-frame."""
+    marker = buf[pos:pos + 1]
+    e = buf.index(b"\r\n", pos)
+    line = buf[pos + 1:e]
+    if marker in (b"+", b"-", b":"):
+        return e + 2
+    if marker == b"$":
+        n = int(line)
+        return e + 2 if n < 0 else e + 2 + n + 2
+    if marker == b"*":
+        n = int(line)
+        if n < 0:
+            return e + 2
+        p = e + 2
+        for _ in range(n):
+            p = _frame_end(buf, p)
+            if p is None:
+                return None
+        return p
+    return None  # not a reply frame (should not happen server-side)
+
+
+
+def _decode(frame):
+    """Decode one reply frame with the pure-python parser, so error
+    frames come back as bytes (hiredis wraps them in objects whose
+    equality is identity-based)."""
+    reader = RESPReader(engine="python")
+    return reader.feed(frame)[0]
+
+
+def _scan_sorted(cmd, value):
+    """[cursor, items] with the items sorted (HSCAN fields keep their
+    values attached); non-scan replies pass through unchanged."""
+    if not isinstance(value, list) or len(value) != 2 or not isinstance(
+        value[1], list
+    ):
+        return value
+    items = value[1]
+    if cmd == b"HSCAN":
+        pairs = sorted(zip(items[::2], items[1::2]))
+        return [value[0], [b for pair in pairs for b in pair]]
+    if cmd == b"SSCAN":
+        return [value[0], sorted(items)]
+    return value
+
+
 def split_frames(out):
-    """RESP frame splitter for flat arrays of bulk/int/simple/error
-    replies (no nested arrays); returns the raw wire frames."""
+    """Raw wire frames of a reply stream (nested arrays included)."""
     frames = []
-    i = 0
-    while i < len(out):
-        m = out[i:i + 1]
-        e = out.index(b"\r\n", i)
-        if m in (b"+", b"-", b":"):
-            frames.append(out[i:e + 2])
-            i = e + 2
-        elif m == b"$":
-            ln = int(out[i + 1:e])
-            if ln < 0:
-                frames.append(out[i:e + 2])
-                i = e + 2
-            else:
-                frames.append(out[i:e + 2 + ln + 2])
-                i = e + 2 + ln + 2
-        elif m == b"*":
-            n = int(out[i + 1:e])
-            if n < 0:
-                frames.append(out[i:e + 2])
-                i = e + 2
-                continue
-            j = e + 2
-            body = bytearray()
-            for _ in range(n):
-                m2 = out[j:j + 1]
-                e2 = out.index(b"\r\n", j)
-                if m2 == b"$":
-                    ln = int(out[j + 1:e2])
-                    if ln < 0:
-                        body += out[j:e2 + 2]
-                        j = e2 + 2
-                    else:
-                        body += out[j:e2 + 2 + ln + 2]
-                        j = e2 + 2 + ln + 2
-                else:
-                    body += out[j:e2 + 2]
-                    j = e2 + 2
-            frames.append(b"*%d\r\n" % n + bytes(body))
-            i = j
-        else:
+    pos = 0
+    while pos < len(out):
+        end = _frame_end(out, pos)
+        if end is None:
             break
+        frames.append(out[pos:end])
+        pos = end
     return frames
 
 
@@ -287,6 +323,21 @@ def main():
                 ours = [re.sub(rb"avg_ttl=\d+", b"avg_ttl=X", f) for f in ours]
             real = [re.sub(rb"^\$\d+\r\n", b"", f) for f in real]
             ours = [re.sub(rb"^\$\d+\r\n", b"", f) for f in ours]
+            # HSCAN/SSCAN item order is iteration order on both sides
+            # (redis makes no promise), so compare those replies as
+            # sorted collections
+            normalized = any(
+                cmd[0] in (b"HSCAN", b"SSCAN") for cmd in batch
+            )
+            if normalized:
+                real = [
+                    _scan_sorted(cmd[0], _decode(f))
+                    for cmd, f in zip(batch, real)
+                ]
+                ours = [
+                    _scan_sorted(cmd[0], _decode(f))
+                    for cmd, f in zip(batch, ours)
+                ]
             if real != ours:
                 mismatches += 1
                 print("== batch %d mismatch" % bi)

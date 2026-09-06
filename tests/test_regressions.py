@@ -222,10 +222,6 @@ def test_sadd_deduplicates():
     assert c.SCARD(b"k") == protocolBuilder(2)
 
 
-def test_sscan_stub_removed():
-    assert not hasattr(_commands(), "SSCAN")
-
-
 # --------------------------------------------------------------- bit commands
 def test_bitop_with_missing_sources_and_bad_ops():
     try:
@@ -1618,3 +1614,60 @@ def test_hello_negotiates_resp2_only():
     err = _expect_error(lambda: c.HELLO(b"3"), "NOPROTO")
     assert err.message == "unsupported protocol version"
     _expect_error(lambda: c.HELLO(b"2", b"AUTH", b"user", b"pass"))  # no password
+
+
+# -------------------------------------------------- collection scans
+def test_collection_scans_one_step_semantics():
+    c = _commands()
+    c.HSET(b"h", b"f1", b"v1", b"f2", b"v2", b"other", b"x")
+    c.SADD(b"s", b"aa", b"ab", b"bb")
+    c.ZADD(b"z", b"1", b"m1", b"2", b"m2", b"3", b"other")
+
+    cursor, items = protocolParser(c.HSCAN(b"h", b"0"))
+    assert cursor == b"0" and sorted(items) == sorted(
+        [b"f1", b"v1", b"f2", b"v2", b"other", b"x"]
+    )
+    cursor, items = protocolParser(c.HSCAN(b"h", b"0", b"MATCH", b"f*"))
+    assert cursor == b"0" and sorted(items) == sorted([b"f1", b"v1", b"f2", b"v2"])
+    # any cursor answers with the full match set and cursor 0, like the
+    # one-step keyspace SCAN (redis also answers non-zero cursors)
+    assert protocolParser(c.HSCAN(b"h", b"42", b"MATCH", b"f*")) == [
+        b"0", [b"f1", b"v1", b"f2", b"v2"]
+    ]
+
+    cursor, members = protocolParser(c.SSCAN(b"s", b"0"))
+    assert cursor == b"0" and set(members) == {b"aa", b"ab", b"bb"}
+    assert protocolParser(c.SSCAN(b"s", b"0", b"MATCH", b"a*"))[1] == [b"aa", b"ab"] or \
+        sorted(protocolParser(c.SSCAN(b"s", b"0", b"MATCH", b"a*"))[1]) == [b"aa", b"ab"]
+
+    # zscan replies in rank order, member/score interleaved
+    assert protocolParser(c.ZSCAN(b"z", b"0")) == [
+        b"0",
+        [b"m1", b"1", b"m2", b"2", b"other", b"3"],
+    ]
+    assert protocolParser(c.ZSCAN(b"z", b"0", b"MATCH", b"m*")) == [
+        b"0", [b"m1", b"1", b"m2", b"2"]
+    ]
+
+    # missing keys scan empty; wrong kinds raise WRONGTYPE
+    assert protocolParser(c.HSCAN(b"noh", b"0")) == [b"0", []]
+    assert protocolParser(c.SSCAN(b"nos", b"0")) == [b"0", []]
+    assert protocolParser(c.ZSCAN(b"noz", b"0")) == [b"0", []]
+    c.SET(b"str", b"x")
+    for call in (
+        lambda: c.HSCAN(b"str", b"0"),
+        lambda: c.SSCAN(b"str", b"0"),
+        lambda: c.ZSCAN(b"str", b"0"),
+    ):
+        _expect_error(call, "WRONGTYPE")
+
+    # argument validation mirrors SCAN
+    err = _expect_error(lambda: c.HSCAN(b"h", b"abc"))
+    assert err.message == "invalid cursor", err.message
+    _expect_error(lambda: c.SSCAN(b"s", b"-1"))
+    _expect_error(lambda: c.ZSCAN(b"z", b"0", b"COUNT", b"0"))
+    _expect_error(lambda: c.ZSCAN(b"z", b"0", b"COUNT", b"x"))
+    _expect_error(lambda: c.HSCAN(b"h", b"0", b"BOGUS", b"1"))
+    _expect_error(lambda: c.HSCAN(b"h", b"0", b"MATCH"))
+    # TYPE is a keyspace-SCAN-only option
+    _expect_error(lambda: c.HSCAN(b"h", b"0", b"TYPE", b"hash"))

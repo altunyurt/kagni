@@ -22,7 +22,10 @@ from .common import (
     KIND_ZSET,
     _format_float,
     _parse_float,
+    compile_glob,
     expect_kind,
+    parse_scan_cursor,
+    parse_scan_options,
     string2ll,
 )
 from .decorator import command_decorator
@@ -525,6 +528,24 @@ class CommandSetMixin:
             zset.remove_rank(start, stop)
         self._drop_empty(key, zset)
         return self._interleave(taken, withscores=True)
+
+    @command_decorator(b"ZSCAN")
+    def ZSCAN(self, key: bytes, cursor: bytes, *options: bytes):
+        """ZSCAN key cursor [MATCH pattern] [COUNT n]: one step, like
+        SCAN; members come with their scores, in rank order."""
+        parse_scan_cursor(cursor)  # validates, redis' "invalid cursor"
+        pattern = parse_scan_options(options)
+        rgx = compile_glob(pattern)
+        zset = self._zset(key)
+        if zset is None:
+            return [b"0", []]
+        out = []
+        for score, member in zset.pairs():
+            if rgx is not None and not rgx.match(member):
+                continue
+            out.append(member)
+            out.append(_format_float(score).encode())
+        return [b"0", out]
 
     @command_decorator(b"ZPOPMIN")
     def ZPOPMIN(self, key: bytes, count: int = None) -> list:

@@ -7,6 +7,7 @@ The scalar parsers (string2ll, floats) mirror redis' util.c routines so
 argument handling is identical across commands.
 """
 
+import fnmatch
 import math
 import re
 from collections import deque
@@ -95,6 +96,50 @@ def _format_float(value):
     if text in ("-0",):
         text = "0"
     return text
+
+
+def compile_glob(pattern):
+    """Compile a SCAN-family MATCH pattern (None -> None: match all)."""
+    if pattern is None:
+        return None
+    re_pattern = fnmatch.translate(pattern.decode("utf-8", "surrogateescape"))
+    return re.compile(re_pattern.encode("utf-8", "surrogateescape"))
+
+
+def parse_scan_cursor(raw):
+    """Cursor argument of the SCAN family, with redis' errors."""
+    try:
+        value = string2ll(raw)
+    except ValueError:
+        raise Errors.INVALID_CURSOR
+    if value < 0:
+        raise Errors.INVALID_CURSOR
+    return value
+
+
+def parse_scan_options(options):
+    """MATCH/COUNT options of the SCAN family (no TYPE, which only the
+    keyspace SCAN takes).  Returns the MATCH pattern (None when absent);
+    COUNT stays a hint, but must be a positive integer like redis."""
+    pattern = None
+    j = 0
+    while j < len(options):
+        opt = options[j].upper()
+        if opt in (b"MATCH", b"COUNT") and j + 1 < len(options):
+            value = options[j + 1]
+            j += 2
+            if opt == b"MATCH":
+                pattern = value
+            else:
+                try:
+                    count = string2ll(value)
+                except ValueError:
+                    raise Errors.NOT_INT
+                if count < 1:
+                    raise Errors.SYNTAX
+        else:
+            raise Errors.SYNTAX
+    return pattern
 
 
 def kind_of(value):
