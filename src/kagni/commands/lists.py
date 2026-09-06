@@ -1,6 +1,7 @@
 """Redis list commands, backed by a ``collections.deque`` of bytes.
 
-Semantics mirror redis' t_list.c (verified against 7.2):
+Semantics mirror redis' t_list.c (targeting 7.4, the LTS line; the
+implemented subset behaves identically in 8.x):
 
 - a deque gives O(1) pushes/pops at both ends like redis' quicklist
 - empty lists are deleted immediately (the redis invariant), so a stored

@@ -109,9 +109,11 @@ Not implemented (yet): blocking commands (`BLPOP`/`BRPOP`/`BLMOVE`), sorted sets
 
 ## Testing & known gaps
 
-The test suite mirrors redis 7.2 semantics per command (happy paths, error
+The test suite mirrors redis 7.4 semantics per command (happy paths, error
 matrices, wire shapes) plus an end-to-end battery over real sockets on
-both event loops and both listener types.  Known gaps, intentionally left
+both event loops and both listener types.  Redis 7.4 is the compatibility
+target (the LTS line; the implemented subset behaves identically in 8.x).
+Known gaps, intentionally left
 open:
 
 - **No differential harness against a real redis** — messages and reply
