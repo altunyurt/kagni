@@ -83,7 +83,7 @@ _WRITE_COMMANDS = frozenset(
 # read-only commands never modify the keyspace; the rest (PING, CLIENT,
 # MULTI, ...) carry no flag at all, like redis' non-readonly flags
 _READONLY_COMMANDS = frozenset(
-    b"get mget strlen getrange exists type ttl pttl keys scan dbsize touch "
+    b"get mget strlen getrange exists type ttl pttl keys scan dbsize touch expiretime pexpiretime "
     b"echo config info command "
     b"getbit bitcount bitpos hscan sscan zscan "
     b"llen lindex lrange lpos "
@@ -637,6 +637,16 @@ class CommandSetMixin:
     @command_decorator(b"PERSIST")
     def PERSIST(self, key: bytes) -> int:
         return self.data.persist(key)
+
+    @command_decorator(b"EXPIRETIME")
+    def EXPIRETIME(self, key: bytes) -> int:
+        value = self.data.wall_expiry(key)
+        return value // 1_000_000_000 if value > 0 else value
+
+    @command_decorator(b"PEXPIRETIME")
+    def PEXPIRETIME(self, key: bytes) -> int:
+        value = self.data.wall_expiry(key)
+        return value // 1_000_000 if value > 0 else value
 
     @command_decorator(b"TTL")
     def TTL(self, key: bytes) -> int:

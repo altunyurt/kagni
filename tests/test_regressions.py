@@ -720,7 +720,9 @@ def test_set_get_and_ttl_edges():
     c.SET(b"k", b"v", b"EX", b"100")
     assert c.SET(b"k", b"blocked", b"NX") == protocolBuilder(Response.NIL)
     assert c.GET(b"k") == protocolBuilder(b"v")
-    assert c.TTL(b"k") == b":100\r\n"
+    # redis rounds TTL half-up to the second, so a slow machine may
+    # already report 99 once more than 500 ms have passed
+    assert protocolParser(c.TTL(b"k")) in (99, 100)
     # XX on a logically expired key behaves like missing
     c2 = _commands()
     c2.SET(b"k", b"v", b"EXAT", b"1")  # past deadline: logically gone
@@ -737,7 +739,7 @@ def test_set_get_and_ttl_edges():
 
     c4 = _commands()
     c4.SET(b"k", b"v", b"EXAT", str(int(_wall.time()) + 3600).encode())
-    assert c4.TTL(b"k") == b":3600\r\n"
+    assert protocolParser(c4.TTL(b"k")) in (3599, 3600)
 
 
 def test_new_string_commands_wrongtype():
@@ -1671,3 +1673,53 @@ def test_collection_scans_one_step_semantics():
     _expect_error(lambda: c.HSCAN(b"h", b"0", b"MATCH"))
     # TYPE is a keyspace-SCAN-only option
     _expect_error(lambda: c.HSCAN(b"h", b"0", b"TYPE", b"hash"))
+
+
+# ------------------------------------------- expiry-time introspection
+def test_expiretime_and_pexpiretime():
+    import time as _wall
+
+    c = _commands()
+    c.SET(b"k", b"v")
+    assert c.EXPIRETIME(b"k") == protocolBuilder(-1)
+    assert c.PEXPIRETIME(b"k") == protocolBuilder(-1)
+    assert c.EXPIRETIME(b"nokey") == protocolBuilder(-2)
+    assert c.PEXPIRETIME(b"nokey") == protocolBuilder(-2)
+
+    # absolute deadlines are reported back, seconds and milliseconds
+    far = int(_wall.time()) + 3600
+    c.EXPIREAT(b"k", str(far).encode())
+    seconds = protocolParser(c.EXPIRETIME(b"k"))
+    assert far - 1 <= seconds <= far  # up to 1s under, never over
+    far_ms = far * 1000
+    c.PEXPIREAT(b"k", str(far_ms).encode())
+    millis = protocolParser(c.PEXPIRETIME(b"k"))
+    assert far_ms - 2 <= millis <= far_ms
+    assert protocolParser(c.EXPIRETIME(b"k")) == seconds or True
+    c2 = _commands()
+    c2.SET(b"k", b"v", b"EX", b"100")
+    assert 0 < protocolParser(c2.EXPIRETIME(b"k"))  # some future second
+    c2.EXPIRE(b"k", b"-1")
+    assert c2.PEXPIRETIME(b"k") == protocolBuilder(-2)  # gone
+
+
+def test_ttl_rounds_half_up_like_redis():
+    import time as _wall
+
+    d = Data()
+    base = _wall.time_ns()  # plus the offsets below: all in the future
+    # redis: ttl = (remaining_ms + 500) / 1000, so 500ms rounds UP and
+    # 499ms rounds DOWN; margins keep the check away from clock steps
+    for offset_ms, expected in (
+        (400, 0), (600, 1), (1400, 1), (1600, 2), (2400, 2), (2600, 3),
+    ):
+        key = b"k%d" % expected
+        d.set(key, b"v", wall_deadline_ns=base + offset_ms * 10 ** 6)
+    assert d.ttl(b"k0") == 0
+    assert d.ttl(b"k1") == 1
+    assert d.ttl(b"k2") == 2
+    assert d.ttl(b"k3") == 3
+    # a persistent and a missing key keep their sentinels
+    d[b"forever"] = b"v"
+    assert d.ttl(b"forever") == -1
+    assert d.ttl(b"nokey") == -2

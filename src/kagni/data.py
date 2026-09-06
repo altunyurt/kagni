@@ -238,6 +238,21 @@ class Data(MutableMapping):
         return 1
 
     def ttl(self, key):
+        """Redis TTL: whole seconds with redis' rounding - the remaining
+        milliseconds are rounded half-up to the nearest second
+        (``(ttl_ms + 500) / 1000``)."""
+        ms = self.ttl_ms(key)
+        if ms < 0:
+            return ms
+        return (ms + 500) // 1000
+
+    def wall_expiry(self, key):
+        """Absolute wall-clock deadline (ns) of a live key's expiry:
+        -2 for missing/expired keys, -1 for keys without a TTL.  The
+        stored monotonic deadline is converted through the current
+        clock offset, so replies can sit up to a millisecond below the
+        exact deadline (the wall clock's sampling step); NTP steps
+        shift the estimate by the step, like every wall conversion."""
         entry = self._storage.get(key)
         if entry is None:
             return -2
@@ -248,9 +263,7 @@ class Data(MutableMapping):
         if expires_at <= now:
             del self._storage[key]
             return -2
-        # ceil so that a freshly expired-away key does not report 0 while
-        # still logically alive for the remainder of the nanosecond
-        return ceil((expires_at - now) / (10 ** 9))
+        return wall_clock_ns() + (expires_at - now)
 
     def ttl_ms(self, key):
         """Millisecond TTL (PTTL): redis keeps expiry at ms granularity

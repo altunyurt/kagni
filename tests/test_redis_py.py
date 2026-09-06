@@ -6,6 +6,8 @@ used redis client works against kagni over a real socket.  Each test
 starts from a flushed store.
 """
 
+import time
+
 import pytest
 
 redis = pytest.importorskip("redis")
@@ -231,3 +233,17 @@ def test_scan_iters(r):
     assert list(r.hscan_iter("noh")) == []
     assert list(r.sscan_iter("nos")) == []
     assert list(r.zscan_iter("noz")) == []
+
+
+def test_expiretime_family(r):
+    r.set("k", "v")
+    assert r.expiretime("k") == -1
+    assert r.pexpiretime("k") == -1
+    assert r.expiretime("nokey") == -2
+    r.expire("k", 3600)
+    deadline = int(r.expiretime("k"))
+    assert abs(deadline - (int(time.time()) + 3600)) <= 1
+    r.pexpire("k", 1500)
+    assert 0 < r.pttl("k") <= 1500
+    # ttl rounds half-up to whole seconds like redis
+    assert r.ttl("k") in (1, 2)
