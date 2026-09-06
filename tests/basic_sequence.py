@@ -4,10 +4,14 @@ __all__ = ["test_sequence"]
 
 test_sequence = [
 {
-            "name": "Check COMMAND return value",
+            "name": "Check COMMAND returns per-command metadata",
             "command": "COMMAND",
             "args": [],
-            "returns": Response.OK,
+            "returns": lambda rv, cs: any(
+                entry[:2] == [b"GET", 2] and [b"readonly"] in entry
+                for entry in rv
+                if isinstance(entry, list)
+            ),
         },
 {
             "name": "Check PING return value",

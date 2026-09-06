@@ -65,6 +65,115 @@ TYPE_NAMES = {
 }
 
 
+# commands that write the keyspace (everything else with keys is
+# classified read-only below; connection/server commands carry no
+# write flag)
+_WRITE_COMMANDS = frozenset(
+    b"append decr decrby del expire expireat getdel getex getset incr "
+    b"incrby incrbyfloat mset msetnx persist pexpire pexpireat psetex set "
+    b"setex setnx setrange setbit bitop "
+    b"linsert lmove lmpop lpop lpush lpushx lrem lset ltrim rpop rpoplpush "
+    b"rpush rpushx "
+    b"sadd sdiffstore sinterstore smove spop srem sunionstore "
+    b"hdel hincrby hset "
+    b"zadd zdiffstore zincrby zinterstore zpopmax zpopmin zrem "
+    b"zremrangebylex zremrangebyrank zremrangebyscore zunionstore "
+    b"flushall flushdb".split()
+)
+# read-only commands never modify the keyspace; the rest (PING, CLIENT,
+# MULTI, ...) carry no flag at all, like redis' non-readonly flags
+_READONLY_COMMANDS = frozenset(
+    b"get mget strlen getrange exists type ttl pttl keys scan dbsize touch "
+    b"echo config info command "
+    b"getbit bitcount bitpos "
+    b"llen lindex lrange lpos "
+    b"scard sdiff sinter sismember smembers srandmember sunion "
+    b"hget hmget hexists hlen hkeys hvals hgetall "
+    b"zcard zcount zdiff zinter zlexcount zmscore zrandmember zrange "
+    b"zrangebylex zrangebyscore zrank zrevrange zrevrangebylex "
+    b"zrevrangebyscore zrevrank zscore zunion".split()
+)
+_ADMIN_COMMANDS = frozenset(b"flushall flushdb config".split())
+
+# redis' help groups for COMMAND DOCS output
+_COMMAND_GROUPS = {
+    b"get": "string", b"mget": "string", b"strlen": "string",
+    b"getrange": "string", b"getset": "string", b"getdel": "string",
+    b"getex": "string", b"set": "string", b"setnx": "string",
+    b"setex": "string", b"psetex": "string", b"mset": "string",
+    b"msetnx": "string", b"append": "string", b"incr": "string",
+    b"decr": "string", b"incrby": "string", b"decrby": "string",
+    b"incrbyfloat": "string", b"setrange": "string", b"echo": "connection",
+    b"ping": "connection", b"client": "connection",
+    b"setbit": "bitmap", b"getbit": "bitmap", b"bitcount": "bitmap",
+    b"bitpos": "bitmap", b"bitop": "bitmap",
+    b"lpush": "list", b"rpush": "list", b"lpushx": "list",
+    b"rpushx": "list", b"llen": "list", b"lindex": "list",
+    b"lset": "list", b"lrange": "list", b"ltrim": "list",
+    b"lrem": "list", b"linsert": "list", b"lpop": "list",
+    b"rpop": "list", b"lmove": "list", b"rpoplpush": "list",
+    b"lpos": "list", b"lmpop": "list",
+    b"sadd": "set", b"scard": "set", b"smembers": "set",
+    b"sismember": "set", b"srem": "set", b"spop": "set",
+    b"srandmember": "set", b"smove": "set", b"sdiff": "set",
+    b"sdiffstore": "set", b"sinter": "set", b"sinterstore": "set",
+    b"sunion": "set", b"sunionstore": "set",
+    b"hset": "hash", b"hget": "hash", b"hmget": "hash",
+    b"hexists": "hash", b"hdel": "hash", b"hlen": "hash",
+    b"hkeys": "hash", b"hvals": "hash", b"hgetall": "hash",
+    b"hincrby": "hash",
+    b"zadd": "sorted-set", b"zcard": "sorted-set",
+    b"zscore": "sorted-set", b"zmscore": "sorted-set",
+    b"zincrby": "sorted-set", b"zrank": "sorted-set",
+    b"zrevrank": "sorted-set", b"zrange": "sorted-set",
+    b"zrevrange": "sorted-set", b"zrangebyscore": "sorted-set",
+    b"zrevrangebyscore": "sorted-set", b"zrangebylex": "sorted-set",
+    b"zrevrangebylex": "sorted-set", b"zcount": "sorted-set",
+    b"zlexcount": "sorted-set", b"zrem": "sorted-set",
+    b"zremrangebyrank": "sorted-set", b"zremrangebyscore": "sorted-set",
+    b"zremrangebylex": "sorted-set", b"zpopmin": "sorted-set",
+    b"zpopmax": "sorted-set", b"zrandmember": "sorted-set",
+    b"zunionstore": "sorted-set", b"zinterstore": "sorted-set",
+    b"zdiffstore": "sorted-set", b"zunion": "sorted-set",
+    b"zinter": "sorted-set", b"zdiff": "sorted-set",
+    b"del": "generic", b"expire": "generic", b"pexpire": "generic",
+    b"expireat": "generic", b"pexpireat": "generic", b"persist": "generic",
+    b"ttl": "generic", b"pttl": "generic", b"type": "generic",
+    b"keys": "generic", b"scan": "generic", b"exists": "generic",
+    b"touch": "generic", b"dbsize": "generic", b"flushdb": "server",
+    b"flushall": "server", b"command": "server", b"config": "server",
+    b"info": "server",
+}
+
+
+def _command_table(cls):
+    """{NAME: (arity, flags, group)} for every registered command.
+
+    Arity follows the redis convention (the command word included):
+    exact counts are positive, variable commands negative.  Redis-6-era
+    entry shape on purpose (name/arity/flags/first/last/step)."""
+    table = {}
+    for klass in cls.__mro__:
+        for attr in vars(klass).values():
+            name = getattr(attr, "command_name", None)
+            if name is None:
+                continue
+            if attr.max_args is not None and attr.max_args == attr.min_args:
+                arity = attr.max_args + 1
+            else:
+                arity = -(attr.min_args + 1)
+            flags = []
+            lower = name.lower()
+            if lower in _WRITE_COMMANDS:
+                flags.append(b"write")
+            elif lower in _READONLY_COMMANDS:
+                flags.append(b"readonly")
+            if lower in _ADMIN_COMMANDS:
+                flags.append(b"admin")
+            table[name] = (arity, flags, _COMMAND_GROUPS.get(lower, "generic"))
+    return table
+
+
 # --------------------------------------------------------------- INFO
 # the sections INFO knows about; unknown section names reply with an
 # empty body (redis behaviour), and the defaults cover everything kagni
@@ -212,8 +321,56 @@ class CommandSetMixin:
         return message
 
     @command_decorator(b"COMMAND")
-    def COMMAND(self, *args) -> Response.OK:
-        return Response.OK
+    def COMMAND(self, *args: bytes):
+        """COMMAND | COUNT | DOCS [name ...]: per-command metadata in
+        redis' shapes (name/arity/flags triples, a count, or the docs
+        map), so clients that enumerate the server surface get arrays
+        instead of the old +OK stub.  Arity follows the decorator's
+        min/max (the redis convention: exact counts positive, variable
+        commands negative); flags carry write/readonly/admin."""
+        if not args:
+            entries = []
+            for name, (arity, flags, group) in _command_table(type(self)).items():
+                entries.append([name, arity, flags, 0, 0, 0])
+            return entries
+        sub = args[0].upper()
+        if sub == b"COUNT" and len(args) == 1:
+            return len(_command_table(type(self)))
+        if sub == b"DOCS":
+            table = _command_table(type(self))
+            if len(args) == 1:
+                wanted = sorted(table)
+            else:
+                wanted = [a.upper() for a in args[1:]]
+            docs = []
+            for name in wanted:
+                if name not in table:
+                    continue  # unknown names are skipped, like redis
+                arity, flags, group = table[name]
+                docs.append(
+                    [
+                        name,
+                        [
+                            b"summary",
+                            b"",
+                            b"since",
+                            b"0.9.0",
+                            b"group",
+                            group.encode(),
+                            b"arity",
+                            arity,
+                            b"flags",
+                            flags,
+                        ],
+                    ]
+                )
+            return docs
+        name = sub.decode("ascii", "replace")
+        raise Error(
+            "ERR",
+            "Unknown subcommand or wrong number of arguments for '{}'. "
+            "Try COMMAND HELP.".format(name),
+        )
 
     @command_decorator(b"TYPE")
     def TYPE(self, key: bytes) -> SimpleString:

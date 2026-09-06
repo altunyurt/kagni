@@ -8,7 +8,6 @@ class Response(Enum):
     OK = auto()
     QUEUED = auto()
     PONG = auto()
-    COMMAND = auto()
     NIL = auto()
     NIL_ARRAY = auto()  # RESP null array (*-1), distinct from an empty array
 

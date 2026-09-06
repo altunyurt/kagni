@@ -182,12 +182,9 @@ class Data(MutableMapping):
             expires_at = None
         self._storage[key] = {"value": value, "expires_at": expires_at}
 
-    def __setitem__(self, key, val, expire_secs: int = None):
-        # TODO: add type checking for the data
-        expires_at = None
-        if expire_secs:
-            expires_at = monotonic_ns_time() + expire_secs * (10 ** 9)
-        self._storage[key] = {"value": val, "expires_at": expires_at}
+    def __setitem__(self, key, val):
+        # plain store: no expiry (commands use set()/expire()/expire_at())
+        self._storage[key] = {"value": val, "expires_at": None}
 
     def __delitem__(self, key):
         """Delete the key (live or expired); return 1 if a live value was

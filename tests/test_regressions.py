@@ -1572,3 +1572,33 @@ def test_expiry_persists_across_snapshot_restore():
     restored2.restore(legacy)
     assert restored2.get(b"old") == b"value"
     assert restored2.ttl(b"old") == -1
+
+
+# ------------------------------------------------------- COMMAND metadata
+def test_command_metadata_replies():
+    c = _commands()
+    # bare COMMAND: per-command entries with redis' (name, arity, flags)
+    # shape; write/read-only classification included
+    table = protocolParser(c.COMMAND())
+    assert isinstance(table, list)
+    by_name = {entry[0]: entry for entry in table if isinstance(entry, list)}
+    assert by_name[b"GET"][1] == 2 and by_name[b"GET"][2] == [b"readonly"]
+    assert by_name[b"SET"][1] == -3 and by_name[b"SET"][2] == [b"write"]
+    assert by_name[b"FLUSHALL"][2] == [b"write", b"admin"]
+    assert by_name[b"PING"][2] == []  # neither read-only nor a write
+    assert by_name[b"ZUNIONSTORE"][2] == [b"write"]
+
+    count = protocolParser(c.COMMAND(b"COUNT"))
+    assert count == len(table) and count > 100
+
+    # DOCS: flat [name, map] pairs, filtered by the requested names
+    docs = protocolParser(c.COMMAND(b"DOCS", b"get", b"nosuchcmd"))
+    assert docs == [
+        [b"GET", [b"summary", b"", b"since", b"0.9.0", b"group", b"string",
+                  b"arity", 2, b"flags", [b"readonly"]]]
+    ]
+    # all docs when no names are given
+    everything = protocolParser(c.COMMAND(b"DOCS"))
+    assert len(everything) == count
+    # unknown subcommands error like the other admin commands
+    assert b"Unknown subcommand" in c.dispatch([b"COMMAND", b"BOGUS"])

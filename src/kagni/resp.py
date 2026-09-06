@@ -17,7 +17,6 @@ responses_dict = {
    Response.NIL_ARRAY: [b"*-1"],
    Response.QUEUED: [b"+QUEUED"],
    Response.PONG: [b"+PONG"],
-   Response.COMMAND: [b"+COMMAND"],
 }
 
 
