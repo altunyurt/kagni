@@ -115,17 +115,16 @@ The test suite mirrors redis 7.4 semantics per command (happy paths, error
 matrices, wire shapes) plus an end-to-end battery over real sockets on
 both event loops and both listener types.  Redis 7.4 is the compatibility
 target (the LTS line; the implemented subset behaves identically in 8.x).
-Known gaps, intentionally left
+The GitHub Actions workflow runs the suite on Python 3.11-3.13, feeds
+both RESP parsers random bytes (`tests/test_fuzz.py`: only a clean
+`ProtocolError`, never a crash), and runs `tests/differential.py` - a
+~400-command byte-parity battery - against a real `redis:7.4` service
+container.  Known gaps, intentionally left
 open:
 
-- **Differential harness is manual, not in CI** — `tests/differential.py`
-  replays a ~400-command stream against a real redis and a fresh kagni
-  and requires byte-identical replies; it needs a redis binary, so it
-  runs by hand (`KAGNI_DIFF_REDIS=host:port python tests/differential.py`)
-  rather than in the default suite.
-- **No parser fuzzing** — malformed input is spot-checked; a random-byte
-  fuzz loop asserting "only `-ERR Protocol error`, never a crash" is not
-  in the suite.
+- **The differential battery needs a redis binary**, so it only runs in
+  the CI job that hosts one; by hand:
+  `KAGNI_DIFF_REDIS=host:port python tests/differential.py`.
 - **The 512 MB string-size guards are not exercised** (allocating that
   much in tests is not worth it); the guards are trivial bounds checks.
 - **`INCRBYFLOAT` runs on double precision** — redis uses 80-bit long
