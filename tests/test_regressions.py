@@ -1894,10 +1894,88 @@ def test_lcs():
     # ambiguous alignments pick the same path as redis (tie-break)
     c.SET(b"u1", b"ab")
     c.SET(b"u2", b"ba")
-    assert c.LCS(b"u1", b"u2") == protocolBuilder(b"a")
+    # redis' tie-break yields "b" here (verified in the differential)
+    assert c.LCS(b"u1", b"u2") == protocolBuilder(b"b")
     assert c.LCS(b"u1", b"u2", b"IDX") == protocolBuilder(
-        [b"matches", [[[0, 0], [1, 1]]], b"len", 1]
+        [b"matches", [[[1, 1], [0, 0]]], b"len", 1]
     )
     c.RPUSH(b"l", b"x")  # a list is the wrong kind for LCS
-    _expect_error(lambda: c.LCS(b"a", b"l"), "WRONGTYPE")
-    _expect_error(lambda: c.LCS(b"l", b"a", b"IDX"), "WRONGTYPE")
+    err = _expect_error(lambda: c.LCS(b"a", b"l"))
+    assert err.message == "The specified keys must contain string values"
+    err = _expect_error(lambda: c.LCS(b"l", b"a", b"IDX"))
+    assert err.message == "The specified keys must contain string values"
+
+
+# ------------------------------------------------------------ bitfield
+def test_bitfield_basics():
+    c = _commands()
+    assert protocolParser(c.BITFIELD(b"nok", b"GET", b"u8", b"0")) == [0]
+    assert c.BITFIELD(b"k", b"SET", b"u8", b"0", b"255") == protocolBuilder([0])
+    assert c.BITFIELD(b"k", b"GET", b"u8", b"0") == protocolBuilder([255])
+    assert c.BITFIELD(b"k", b"GET", b"u4", b"0") == protocolBuilder([15])
+    assert c.BITFIELD(b"k", b"GET", b"i8", b"0") == protocolBuilder([-1])
+    # multi-subcommand replies carry one slot per subcommand
+    assert c.BITFIELD(
+        b"k", b"SET", b"u8", b"8", b"100", b"GET", b"u8", b"8"
+    ) == protocolBuilder([0, 100])
+    # '#N' offsets count in units of the type width; plain offsets are bits
+    assert c.BITFIELD(b"k", b"SET", b"u8", b"#2", b"7") == protocolBuilder([0])
+    assert c.BITFIELD(b"k", b"GET", b"u8", b"16") == protocolBuilder([7])
+    # signed storage round-trips and interacts with SETBIT
+    assert c.BITFIELD(b"k", b"SET", b"i8", b"#3", b"-1") == protocolBuilder([0])
+    assert c.BITFIELD(b"k", b"GET", b"i8", b"24") == protocolBuilder([-1])
+    assert c.GETBIT(b"k", b"24") == protocolBuilder(1)
+    # a write into a missing key creates the bitmap
+    assert c.BITFIELD(b"new", b"INCRBY", b"u8", b"0", b"5") == protocolBuilder([5])
+    assert c.TYPE(b"new") == protocolBuilder(SimpleString("string"))
+
+
+def test_bitfield_overflow_modes():
+    c = _commands()
+    c.BITFIELD(b"k", b"SET", b"u8", b"0", b"255")
+    # WRAP is the default
+    assert c.BITFIELD(b"k", b"INCRBY", b"u8", b"0", b"1") == protocolBuilder([0])
+    assert c.BITFIELD(b"k", b"OVERFLOW", b"SAT", b"INCRBY", b"u8", b"0", b"1") == protocolBuilder([255])
+    # FAIL replies nil for that slot and writes nothing
+    assert c.BITFIELD(b"k", b"OVERFLOW", b"FAIL", b"INCRBY", b"u8", b"0", b"1") == protocolBuilder([Response.NIL])
+    assert c.BITFIELD(b"k", b"GET", b"u8", b"0") == protocolBuilder([255])
+    # signed saturation clamps into the signed range
+    c.BITFIELD(b"k", b"SET", b"i8", b"8", b"127")
+    assert c.BITFIELD(b"k", b"OVERFLOW", b"SAT", b"INCRBY", b"i8", b"8", b"1") == protocolBuilder([127])
+    assert c.BITFIELD(b"k", b"OVERFLOW", b"WRAP", b"INCRBY", b"i8", b"8", b"1") == protocolBuilder([-128])
+    # SET honours the overflow mode too
+    assert c.BITFIELD(b"k", b"OVERFLOW", b"SAT", b"SET", b"u8", b"16", b"300") == protocolBuilder([0])
+    assert c.BITFIELD(b"k", b"GET", b"u8", b"16") == protocolBuilder([255])
+    assert c.BITFIELD(b"k", b"OVERFLOW", b"FAIL", b"SET", b"u8", b"16", b"300") == protocolBuilder([Response.NIL])
+    assert c.BITFIELD(b"k", b"GET", b"u8", b"16") == protocolBuilder([255])
+    # unsigned wrap of a negative increment
+    c.BITFIELD(b"k", b"SET", b"u8", b"24", b"10")
+    assert c.BITFIELD(b"k", b"INCRBY", b"u8", b"24", b"-11") == protocolBuilder([255])
+
+
+def test_bitfield_errors_and_ro():
+    c = _commands()
+    err = _expect_error(lambda: c.BITFIELD(b"k", b"GET", b"u64", b"0"))
+    assert err.message.startswith("Invalid bitfield type.")
+    _expect_error(lambda: c.BITFIELD(b"k", b"GET", b"u65", b"0"))
+    _expect_error(lambda: c.BITFIELD(b"k", b"GET", b"i0", b"0"))
+    _expect_error(lambda: c.BITFIELD(b"k", b"GET", b"x8", b"0"))
+    err = _expect_error(lambda: c.BITFIELD(b"k", b"GET", b"u8", b"-1"))
+    assert err.message == "bit offset is not an integer or out of range"
+    _expect_error(lambda: c.BITFIELD(b"k", b"GET", b"u8", b"x"))
+    _expect_error(lambda: c.BITFIELD(b"k", b"SET", b"u1", b"5000000000", b"1"))
+    _expect_error(lambda: c.BITFIELD(b"k", b"OVERFLOW", b"BOGUS"))
+    _expect_error(lambda: c.BITFIELD(b"k", b"BOGUS"))
+    _expect_error(lambda: c.BITFIELD(b"k", b"SET", b"u8"))
+    assert c.BITFIELD(b"k") == protocolBuilder([])
+    # read-only variant
+    c.BITFIELD(b"k", b"SET", b"u8", b"0", b"65")
+    assert c.BITFIELD_RO(b"k", b"GET", b"u8", b"0") == protocolBuilder([65])
+    assert c.BITFIELD_RO(b"nok", b"GET", b"u8", b"0") == protocolBuilder([0])
+    err = _expect_error(lambda: c.BITFIELD_RO(b"k", b"SET", b"u8", b"0", b"1"))
+    assert err.message == "BITFIELD_RO only supports the GET subcommand"
+    _expect_error(lambda: c.BITFIELD_RO(b"k", b"INCRBY", b"u8", b"0", b"1"))
+    # OVERFLOW is accepted (and irrelevant) in the read-only variant
+    assert c.BITFIELD_RO(b"k", b"OVERFLOW", b"WRAP", b"GET", b"u8", b"0") == protocolBuilder([65])
+    c.SET(b"s", b"x")  # kagni's bitmap/string split: WRONGTYPE like SETBIT
+    _expect_error(lambda: c.BITFIELD(b"s", b"GET", b"u8", b"0"), "WRONGTYPE")

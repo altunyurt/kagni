@@ -72,7 +72,7 @@ _WRITE_COMMANDS = frozenset(
     b"append decr decrby del expire expireat getdel getex getset incr "
     b"incrby incrbyfloat mset msetnx persist pexpire pexpireat psetex set "
     b"hmset hsetnx hincrbyfloat "
-    b"setex setnx setrange setbit bitop "
+    b"setex setnx setrange setbit bitop bitfield "
     b"linsert lmove lmpop lpop lpush lpushx lrem lset ltrim rpop rpoplpush "
     b"rpush rpushx "
     b"sadd sdiffstore sinterstore smove spop srem sunionstore "
@@ -86,7 +86,7 @@ _WRITE_COMMANDS = frozenset(
 _READONLY_COMMANDS = frozenset(
     b"get mget strlen getrange substr lcs exists type ttl pttl keys scan dbsize touch expiretime pexpiretime "
     b"echo config info command "
-    b"getbit bitcount bitpos hscan sscan zscan "
+    b"getbit bitcount bitpos bitfield_ro hscan sscan zscan "
     b"llen lindex lrange lpos "
     b"scard sdiff sinter sintercard sismember smembers smismember srandmember sscan sunion "
     b"hget hmget hexists hlen hkeys hvals hgetall hscan hstrlen hrandfield "
@@ -803,7 +803,7 @@ class CommandSetMixin:
 
     # ------------------------------------------------------------ longest
     # common subsequence (LCS)
-    def _lcs_runs(self, a, b, prefer_up=True):
+    def _lcs_runs(self, a, b, prefer_up=False):
         """(length, matches) of the LCS of bytes strings *a*/*b*.
 
         The classic DP runs in O(n*m) time and memory (one direction
@@ -827,11 +827,16 @@ class CommandSetMixin:
                 if ai == b[j - 1]:
                     cur[j] = prev[j - 1] + 1
                     drow[j] = 1
-                elif (prev[j] > cur[j - 1]) or (
+                elif prev[j] > cur[j - 1] or (
                     prefer_up and prev[j] == cur[j - 1]
                 ):
                     cur[j] = prev[j]
                     drow[j] = 2
+                elif prev[j] == cur[j - 1]:
+                    # ties move left (redis' backtrack: verified against
+                    # ambiguous pairs like "ab"/"ba" -> "b")
+                    cur[j] = cur[j - 1]
+                    drow[j] = 3
                 else:
                     cur[j] = cur[j - 1]
                     drow[j] = 3
@@ -873,6 +878,11 @@ class CommandSetMixin:
         min_match_len = 1
         with_match_len = False
         j = 0
+        # type-check before anything else, with redis' own wording
+        for key in (key1, key2):
+            raw = self.data.get(key)
+            if raw is not None and kind_of(raw) != KIND_STRING:
+                raise Errors.WRONGTYPE_STRING
         while j < len(options):
             opt = options[j].upper()
             if opt == b"LEN":
@@ -901,6 +911,8 @@ class CommandSetMixin:
         # MINMATCHLEN / WITHMATCHLEN only shape the IDX reply; without
         # IDX redis ignores them
 
+        # LCS uses its own WRONGTYPE wording, and missing keys simply
+        # count as empty strings
         val1 = self._string(key1)
         val2 = self._string(key2)
         a = val1 if val1 is not None else b""
@@ -909,23 +921,46 @@ class CommandSetMixin:
         if len_only:
             length, _ = self._lcs_runs(a, b)
             return length
+        length, matches = self._lcs_runs(a, b)
         if not idx:
-            # full traceback for the subsequence itself
-            length, matches = self._lcs_runs(a, b)
-            if not matches:
-                return b""
             # matches come end-to-start: rebuild the subsequence from the
             # first match forwards
             return b"".join(a[a1:a2 + 1] for a1, a2, _, _ in reversed(matches))
-        length, matches = self._lcs_runs(a, b)
+        # IDX match positions come from walking the *rightmost*
+        # occurrences of the subsequence in both strings (redis'
+        # lcsIndex), not from the DP path: ambiguous regions then
+        # segment exactly like redis
+        lcs = b"".join(a[a1:a2 + 1] for a1, a2, _, _ in reversed(matches))
         reply_matches = []
-        for a1, a2, b1, b2 in matches:
-            if a2 - a1 + 1 < min_match_len:
-                continue
-            match = [[a1, a2], [b1, b2]]
-            if with_match_len:
-                match.append(a2 - a1 + 1)
-            reply_matches.append(match)
+        i, j, k = len(a) - 1, len(b) - 1, len(lcs) - 1
+        run = None  # (a_hi, b_hi, cells) while chars align contiguously
+        while k >= 0:
+            char = lcs[k]
+            while i >= 0 and a[i] != char:
+                i -= 1
+            while j >= 0 and b[j] != char:
+                j -= 1
+            if run is not None and i == run[0] - 1 and j == run[1] - 1:
+                run = (run[0] - 1, run[1] - 1, run[2] + 1)
+            else:
+                if run is not None:
+                    a_hi, b_hi, cells = run
+                    if cells >= min_match_len:
+                        match = [[a_hi, a_hi + cells - 1], [b_hi, b_hi + cells - 1]]
+                        if with_match_len:
+                            match.append(cells)
+                        reply_matches.append(match)
+                run = (i, j, 1)
+            i -= 1
+            j -= 1
+            k -= 1
+        if run is not None:
+            a_hi, b_hi, cells = run
+            if cells >= min_match_len:
+                match = [[a_hi, a_hi + cells - 1], [b_hi, b_hi + cells - 1]]
+                if with_match_len:
+                    match.append(cells)
+                reply_matches.append(match)
         return [b"matches", reply_matches, b"len", length]
 
     @command_decorator(b"LCS")

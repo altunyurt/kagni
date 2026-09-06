@@ -83,6 +83,16 @@ class Errors:
     # HINCRBYFLOAT rejects non-finite results with its own wording
     # (the key-level INCRBYFLOAT says "increment would produce NaN...")
     HASH_NAN_OR_INF = Error("ERR", "value is NaN or Infinity")
+    BITFIELD_TYPE = Error(
+        "ERR",
+        "Invalid bitfield type. Use something like i16 u8. Note that u64 "
+        "is not supported but i64 is.",
+    )
+    BITFIELD_OVERFLOW = Error("ERR", "Invalid OVERFLOW type specified")
+    BITFIELD_RO = Error("ERR", "BITFIELD_RO only supports the GET subcommand")
+    WRONGTYPE_STRING = Error(
+        "ERR", "The specified keys must contain string values"
+    )
 
     @staticmethod
     def arity(command):
