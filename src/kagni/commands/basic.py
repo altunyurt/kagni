@@ -379,6 +379,52 @@ class CommandSetMixin:
             return SimpleString("none")
         return SimpleString(TYPE_NAMES.get(kind_of(val), "none"))
 
+    @command_decorator(b"HELLO")
+    def HELLO(self, *args: bytes):
+        """HELLO [protover [AUTH user pass] [SETNAME name]]
+
+        kagni speaks RESP2 only: HELLO 2 negotiates it (the reply is the
+        redis handshake map), any other protocol version answers
+        NOPROTO like a RESP2-only server would, and AUTH errors because
+        no password is configured.  Lets modern clients that probe the
+        protocol (redis-py >= 8 defaults to HELLO 3) connect with
+        protocol=2.
+        """
+        proto = 2
+        j = 0
+        while j < len(args):
+            opt = args[j].upper()
+            if opt == b"AUTH":
+                if j + 2 >= len(args):
+                    raise Errors.SYNTAX
+                raise Error(
+                    "ERR",
+                    "AUTH <password> called without any password configured "
+                    "for the default user. Are you sure your configuration "
+                    "is correct?",
+                )
+            if opt == b"SETNAME":
+                if j + 1 >= len(args):
+                    raise Errors.SYNTAX
+                j += 2
+                continue
+            try:
+                proto = string2ll(args[j])
+            except ValueError:
+                raise Errors.NOT_INT
+            j += 1
+        if proto != 2:
+            raise Error("NOPROTO", "unsupported protocol version")
+        return [
+            b"server", b"redis",
+            b"version", b"7.4.0",
+            b"proto", 2,
+            b"id", 1,
+            b"mode", b"standalone",
+            b"role", b"master",
+            b"modules", [],
+        ]
+
     @command_decorator(b"CLIENT")
     def CLIENT(self, *args: bytes):
         """Minimal CLIENT: stubs for what real clients probe on connect.

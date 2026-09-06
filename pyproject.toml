@@ -46,4 +46,5 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "redis>=5.0",
 ]

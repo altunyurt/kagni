@@ -1602,3 +1602,19 @@ def test_command_metadata_replies():
     assert len(everything) == count
     # unknown subcommands error like the other admin commands
     assert b"Unknown subcommand" in c.dispatch([b"COMMAND", b"BOGUS"])
+
+
+# ------------------------------------------------------------ HELLO/RESP2
+def test_hello_negotiates_resp2_only():
+    c = _commands()
+    reply = protocolParser(c.HELLO())
+    assert reply == [
+        b"server", b"redis", b"version", b"7.4.0", b"proto", 2,
+        b"id", 1, b"mode", b"standalone", b"role", b"master",
+        b"modules", [],
+    ]
+    reply2 = protocolParser(c.HELLO(b"2", b"SETNAME", b"cli"))
+    assert reply2[reply2.index(b"proto") + 1] == 2
+    err = _expect_error(lambda: c.HELLO(b"3"), "NOPROTO")
+    assert err.message == "unsupported protocol version"
+    _expect_error(lambda: c.HELLO(b"2", b"AUTH", b"user", b"pass"))  # no password
