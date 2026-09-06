@@ -240,7 +240,7 @@ wheels = [
 
 [[package]]
 name = "kagni"
-version = "0.9.1"
+version = "0.9.2"
 source = { editable = "." }
 dependencies = [
     { name = "apsw" },

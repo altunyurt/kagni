@@ -1,6 +1,6 @@
 [project]
 name = "kagni"
-version = "0.9.1"
+version = "0.9.2"
 description = "Python-native, Redis-protocol data store daemon with sqlite snapshots"
 readme = "README.md"
 license = "MIT"
