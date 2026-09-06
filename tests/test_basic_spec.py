@@ -1,8 +1,13 @@
 from kagni.constants import Response, SimpleString
 
-__all__ = ["test_sequence"]
+"""Spec-table battery for the basic commands, one pytest case per row
+(converted from the former table-runner format)."""
 
-test_sequence = [
+import pytest
+
+from .spec_runner import run_spec_item
+
+ITEMS = [
 {
             "name": "Check COMMAND returns per-command metadata",
             "command": "COMMAND",
@@ -695,5 +700,12 @@ test_sequence = [
         "command": "CLIENT",
         "args": [b"ID"],
         "returns": 1,
-    },
-]
+    },]
+
+IDS = ["%03d: %s" % (i, item.get("name", "?")) for i, item in enumerate(ITEMS)]
+
+
+@pytest.mark.parametrize("item", ITEMS, ids=IDS)
+def test_spec_item(item):
+    """One spec-table row as its own pytest case."""
+    run_spec_item(item)
