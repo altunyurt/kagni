@@ -1723,3 +1723,30 @@ def test_ttl_rounds_half_up_like_redis():
     d[b"forever"] = b"v"
     assert d.ttl(b"forever") == -1
     assert d.ttl(b"nokey") == -2
+
+
+# ------------------------------------------------------- reader buffer cap
+def test_reader_caps_announced_giant_payloads():
+    # both engines must refuse a peer that announces a huge bulk and
+    # keeps delivering it (python engine: buffer cap; hiredis engine:
+    # in-flight byte cap), instead of buffering without bound
+    for engine in [r.engine for r in _readers()]:
+        reader = RESPReader(engine=engine)
+        reader.MAX_BUFFER = 64
+        reader.feed(b"$1000000\r\n")  # announcement alone is fine
+        raised = False
+        try:
+            reader.feed(b"x" * 200)  # the payload arrives
+        except ProtocolError:
+            raised = True
+        assert raised, "%s engine accepted an oversized payload" % engine
+
+        # partial payloads below the cap stay buffered (no premature
+        # error), and legitimate messages still parse
+        reader2 = RESPReader(engine=engine)
+        reader2.MAX_BUFFER = 64
+        reader2.feed(b"*2\r\n$3\r\nGET\r\n$3\r\n")
+        reader2.feed(b"key\r\n")
+        for message in reader2.feed(b"$1\r\nx\r\n"):
+            pass
+        reader2.feed(b"")  # draining leftover state must not raise

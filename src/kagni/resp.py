@@ -260,6 +260,16 @@ class RESPReader:
             if data:
                 self._reader.feed(data)
                 self._fed += len(data)
+                if (
+                    not self._boundary_unknown
+                    and self._fed - self._consumed > self.MAX_BUFFER
+                ):
+                    # a peer announced a giant payload and keeps
+                    # delivering it: hiredis buffers it internally, so
+                    # cap the in-flight bytes like the python engine
+                    # caps its buffer (the check needs canonical
+                    # lengths, which null/error messages do not have)
+                    raise ProtocolError("request exceeds maximum allowed size")
             while True:
                 message = self._reader.gets()
                 if message is False:  # hiredis: no complete message buffered

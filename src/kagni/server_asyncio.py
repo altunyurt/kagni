@@ -26,16 +26,30 @@ class RedisServerProtocol(asyncio.Protocol):
     """One RESPReader per connection provides correct framing: partial
     reads, pipelined commands and CRLF bytes inside bulk values all work,
     and protocol errors close the connection with a -ERR line instead of
-    killing the loop."""
+    killing the loop.
+
+    Backpressure: replies that a slow client has not read yet sit in the
+    transport's write buffer, so once the backlog passes a high-water
+    mark reading is paused and only resumed when it drains (asyncio has
+    no drain callback on raw transports, so a short poll runs while
+    paused).  Without this a client that stops reading would make the
+    server buffer every later reply without bound; the trio backend
+    throttles naturally through send_all."""
+    HIGH_WATER = 1 << 20  # 1 MiB of unread replies
+    LOW_WATER = HIGH_WATER // 2
 
     def __init__(self, command_handler):
         self._handler = command_handler
         self._parser = RESPReader()
         self._session = Session()  # per-connection MULTI/EXEC state
         self._transport = None
+        self._loop = None
+        self._write_paused = False
+        self._resume_handle = None
 
     def connection_made(self, transport):
         self._transport = transport
+        self._loop = asyncio.get_running_loop()
 
     def data_received(self, data):
         if self._transport is None:
@@ -51,8 +65,38 @@ class RedisServerProtocol(asyncio.Protocol):
                 b"-ERR Protocol error: " + str(exc).encode() + b"\r\n"
             )
             self._transport.close()
+        self._maybe_pause_reading()
+
+    def _maybe_pause_reading(self):
+        """Pause the socket when the unread reply backlog grows past the
+        high-water mark (a client that stopped reading)."""
+        transport = self._transport
+        if (
+            transport is None
+            or self._write_paused
+            or transport.get_write_buffer_size() <= self.HIGH_WATER
+        ):
+            return
+        self._write_paused = True
+        transport.pause_reading()
+        self._resume_handle = self._loop.call_later(0.1, self._maybe_resume_reading)
+
+    def _maybe_resume_reading(self):
+        self._resume_handle = None
+        transport = self._transport
+        if transport is None:
+            self._write_paused = False
+            return
+        if transport.get_write_buffer_size() < self.LOW_WATER:
+            self._write_paused = False
+            transport.resume_reading()
+        else:
+            self._resume_handle = self._loop.call_later(0.1, self._maybe_resume_reading)
 
     def connection_lost(self, exc):
+        if self._resume_handle is not None:
+            self._resume_handle.cancel()
+            self._resume_handle = None
         self._transport = None
 
 
