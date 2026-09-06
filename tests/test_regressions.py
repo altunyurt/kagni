@@ -1301,3 +1301,229 @@ def test_setbit_offset_cap():
     err = _expect_error(lambda: c.SETBIT(b"k", b"4294967296", b"1"))
     assert err.message == "bit offset is not an integer or out of range"
     assert c.SETBIT(b"k", b"4294967295", b"1") == protocolBuilder(0)
+
+
+# ------------------------------------------------- hash family round-out
+def test_hset_variadic_and_hash_reads():
+    c = _commands()
+    assert c.HSET(b"h", b"a", b"1", b"b", b"2") == protocolBuilder(2)
+    assert c.HSET(b"h", b"a", b"x", b"c", b"3") == protocolBuilder(1)  # only c is new
+    assert c.HGET(b"h", b"a") == protocolBuilder(b"x")
+    assert c.HMGET(b"h", b"a", b"nope", b"c") == protocolBuilder(
+        [b"x", Response.NIL, b"3"]
+    )
+    # a missing key replies one nil per requested field
+    assert c.HMGET(b"noh", b"a", b"b") == protocolBuilder([Response.NIL, Response.NIL])
+    assert c.HLEN(b"h") == protocolBuilder(3)
+    assert c.HLEN(b"noh") == protocolBuilder(0)
+    assert c.HKEYS(b"h") == protocolBuilder([b"a", b"b", b"c"])
+    assert c.HVALS(b"h") == protocolBuilder([b"x", b"2", b"3"])
+    assert c.HKEYS(b"noh") == protocolBuilder([])
+    # arity: a field without a value, or no pairs at all
+    assert b"wrong number of arguments" in c.dispatch([b"HSET", b"h", b"f"])
+    assert b"wrong number of arguments" in c.dispatch([b"HSET", b"h"])
+    assert b"wrong number of arguments" in c.dispatch([b"HMGET", b"h"])
+
+
+def test_hincrby():
+    c = _commands()
+    assert c.HINCRBY(b"h", b"cnt", b"5") == protocolBuilder(5)
+    assert c.HINCRBY(b"h", b"cnt", b"-2") == protocolBuilder(3)
+    assert c.HINCRBY(b"h", b"cnt", b"-10") == protocolBuilder(-7)
+    c2 = _commands()
+    c2.HSET(b"h", b"txt", b"abc")
+    err = _expect_error(lambda: c2.HINCRBY(b"h", b"txt", b"1"))
+    assert err.message == "hash value is not an integer", err.message
+    c3 = _commands()
+    c3.HSET(b"h", b"big", b"9223372036854775807")
+    _expect_error(lambda: c3.HINCRBY(b"h", b"big", b"1"))  # overflow
+    c4 = _commands()
+    c4.SET(b"s", b"x")
+    _expect_error(lambda: c4.HINCRBY(b"s", b"f", b"1"), "WRONGTYPE")
+    _expect_error(lambda: c4.HSET(b"s", b"f", b"v"), "WRONGTYPE")
+
+
+# ----------------------------------------------------- expire family
+def test_expire_family_ms_and_absolute():
+    c = _commands()
+    c.SET(b"k", b"v")
+    assert c.PEXPIRE(b"k", b"100000") == protocolBuilder(1)
+    assert 0 < protocolParser(c.PTTL(b"k")) <= 100000
+    c2 = _commands()
+    c2.SET(b"k", b"v")
+    # a past absolute deadline deletes the key, like a non-positive TTL
+    assert c2.EXPIREAT(b"k", b"1") == protocolBuilder(1)
+    assert c2.EXISTS(b"k") == protocolBuilder(0)
+    c3 = _commands()
+    c3.SET(b"k", b"v")
+    assert c3.PEXPIREAT(b"k", b"1") == protocolBuilder(1)
+    assert c3.EXISTS(b"k") == protocolBuilder(0)
+    # missing keys report 0 / -2, never create anything
+    c4 = _commands()
+    assert c4.PEXPIRE(b"nokey", b"100") == protocolBuilder(0)
+    assert c4.EXPIREAT(b"nokey", b"9999999999") == protocolBuilder(0)
+    assert c4.PTTL(b"nokey") == protocolBuilder(-2)
+    assert c4.TTL(b"nokey") == protocolBuilder(-2)
+    # strict integer parsing, like every typed argument
+    _expect_error(lambda: c4.PEXPIRE(b"k", b"x"))
+    _expect_error(lambda: c4.PEXPIRE(b"k", b"99999999999999999999999999"))
+    _expect_error(lambda: c4.EXPIREAT(b"k", b"+5"))
+    # relative ms expiry keeps sub-second precision
+    c5 = _commands()
+    c5.SET(b"k", b"v")
+    c5.PEXPIRE(b"k", b"1500")
+    assert 1400 < protocolParser(c5.PTTL(b"k")) <= 1500
+    assert protocolParser(c5.TTL(b"k")) == 2  # rounds up like redis
+
+
+def test_echo_and_info():
+    c = _commands()
+    assert c.ECHO(b"hello world") == protocolBuilder(b"hello world")
+    assert c.ECHO(b"") == protocolBuilder(b"")
+
+    c.SET(b"k", b"v")
+    body = protocolParser(c.INFO())
+    assert b"# Server" in body and b"redis_version:7.4.0" in body
+    assert b"# Keyspace" in body and b"db0:keys=1,expires=0" in body
+    assert protocolParser(c.INFO(b"server")).startswith(b"# Server")
+    # unknown sections reply with an empty body, like redis
+    assert protocolParser(c.INFO(b"nosuchsection")) == b""
+
+
+# ------------------------------------------------------------- zset kinds
+def test_zset_scan_type_and_snapshot():
+    c = _commands()
+    c.ZADD(b"z", b"1", b"a")
+    assert c.TYPE(b"z") == protocolBuilder(SimpleString("zset"))
+    assert c.SCAN(b"0", b"TYPE", b"zset") == protocolBuilder([b"0", [b"z"]])
+
+    # the snapshot copies the container: later in-place writes must not
+    # tear it, and pickling round-trips
+    snap = c.data.snapshot()
+    c.ZADD(b"z", b"2", b"b")
+    c.data[b"z"].add(b"c", 3)
+    assert len(snap[b"z"]) == 1
+    c.ZADD(b"z2", b"9", b"m")
+    snap2 = c.data.snapshot()
+    c2 = _commands()
+    for key, value in snap2.items():
+        c2.data[key] = value
+    assert c2.ZSCORE(b"z2", b"m") == protocolBuilder(b"9")
+
+
+def test_zset_ttl_survives_in_place_ops():
+    c = _commands()
+    c.ZADD(b"z", b"1", b"a")
+    c.EXPIRE(b"z", b"100")
+    c.ZADD(b"z", b"2", b"b")  # additions mutate the stored set in place
+    assert c.data.ttl(b"z") > 0
+    c.ZINCRBY(b"z", b"1", b"a")
+    c.ZREM(b"z", b"b")
+    assert c.data.ttl(b"z") > 0
+    # emptying the set deletes the key (and with it the TTL)
+    c.ZPOPMIN(b"z")
+    assert c.EXISTS(b"z") == protocolBuilder(0)
+
+
+def test_zset_option_matrix_and_errors():
+    c = _commands()
+    c.ZADD(b"z", b"1", b"a", b"2", b"b")
+    err = _expect_error(lambda: c.ZADD(b"z", b"NX", b"XX", b"1", b"a"))
+    assert err.message == "XX and NX options at the same time are not compatible"
+    _expect_error(lambda: c.ZADD(b"z", b"GT", b"LT", b"1", b"a"))
+    _expect_error(lambda: c.ZADD(b"z", b"NX", b"GT", b"1", b"a"))
+    err = _expect_error(lambda: c.ZADD(b"z", b"INCR", b"1", b"a", b"2", b"b"))
+    assert err.message == "INCR option supports a single increment-element pair"
+    _expect_error(lambda: c.ZADD(b"z", b"nan", b"a"))
+    _expect_error(lambda: c.ZADD(b"z", b"1", b"a", b"2"))  # dangling score
+    # NaN results (inf + -inf) error with redis' exact message
+    c.ZADD(b"i", b"inf", b"m")
+    err = _expect_error(lambda: c.ZINCRBY(b"i", b"-inf", b"m"))
+    assert err.message == "resulting score is not a number (NaN)", err.message
+    # option grammar errors
+    _expect_error(lambda: c.ZRANGE(b"z", b"0", b"-1", b"LIMIT", b"0", b"1"))
+    _expect_error(lambda: c.ZRANGE(b"z", b"0", b"-1", b"REV", b"REV"))
+    _expect_error(lambda: c.ZRANGE(b"z", b"0", b"-1", b"BYSCORE", b"BYLEX"))
+    err = _expect_error(lambda: c.ZRANGE(b"z", b"-", b"+", b"BYLEX", b"WITHSCORES"))
+    assert err.message.endswith("not supported in combination with BYLEX")
+    err = _expect_error(lambda: c.ZRANGE(b"z", b"abc", b"1", b"BYSCORE"))
+    assert err.message == "min or max is not a float", err.message
+    err = _expect_error(lambda: c.ZRANGEBYLEX(b"z", b"x", b"+"))
+    assert err.message == "min or max not valid string range item", err.message
+    _expect_error(lambda: c.ZRANGE(b"z", b"0", b"-1", b"BOGUS"))
+    # degenerate lex windows are empty, not errors ('-' as max etc.)
+    assert c.ZRANGEBYLEX(b"z", b"-", b"-") == protocolBuilder([])
+    assert c.ZRANGEBYLEX(b"z", b"+", b"+") == protocolBuilder([])
+    assert c.ZLEXCOUNT(b"z", b"-", b"-") == protocolBuilder(0)
+    # bounds are validated before the key lookup
+    _expect_error(lambda: c.ZCOUNT(b"missing", b"abc", b"1"))
+    err = _expect_error(lambda: c.ZRANGE(b"missing", b"x", b"1", b"BYSCORE"))
+    assert err.message == "min or max is not a float", err.message
+
+
+def test_zset_wrongtype_and_store_edges():
+    c = _commands()
+    c.SET(b"s", b"x")
+    for call in (
+        lambda: c.ZADD(b"s", b"1", b"a"),
+        lambda: c.ZRANGE(b"s", b"0", b"-1"),
+        lambda: c.ZSCORE(b"s", b"a"),
+        lambda: c.ZPOPMIN(b"s"),
+        lambda: c.ZINCRBY(b"s", b"1", b"a"),
+        lambda: c.ZUNIONSTORE(b"d", b"1", b"s"),
+        lambda: c.ZRANK(b"s", b"a"),
+    ):
+        _expect_error(call, "WRONGTYPE")
+
+    # numkeys framing errors carry redis' exact text
+    err = _expect_error(lambda: c.ZUNIONSTORE(b"d", b"0", b"s"))
+    assert err.message == "at least 1 input key is needed for 'zunionstore' command"
+    err = _expect_error(lambda: c.ZDIFF(b"0", b"s"))
+    assert err.message == "at least 1 input key is needed for 'zdiff' command"
+    _expect_error(lambda: c.ZUNIONSTORE(b"d", b"2", b"s"))
+    _expect_error(lambda: c.ZUNIONSTORE(b"d", b"1", b"s", b"WEIGHTS"))  # count mismatch
+    err = _expect_error(lambda: c.ZUNIONSTORE(b"d", b"1", b"s", b"WEIGHTS", b"x"))
+    assert err.message == "weight value is not a float", err.message
+    _expect_error(lambda: c.ZUNIONSTORE(b"d", b"1", b"s", b"AGGREGATE", b"AVG"))
+    # WITHSCORES is read-side only
+    _expect_error(lambda: c.ZDIFFSTORE(b"d", b"1", b"s", b"WITHSCORES"))
+
+    # a store whose result is empty deletes the destination; the result
+    # never aliases a source key (self-union doubles the scores)
+    c2 = _commands()
+    c2.ZADD(b"a", b"1", b"x")
+    c2.SET(b"dst", b"old")
+    assert c2.ZINTERSTORE(b"dst", b"2", b"a", b"missing") == protocolBuilder(0)
+    assert c2.EXISTS(b"dst") == protocolBuilder(0)
+    assert c2.ZUNIONSTORE(b"a", b"1", b"a", b"WEIGHTS", b"2") == protocolBuilder(1)
+    assert c2.ZSCORE(b"a", b"x") == protocolBuilder(b"2")
+    # ZRANK: null array with WITHSCORE, null bulk without
+    c3 = _commands()
+    c3.ZADD(b"z", b"1", b"m")
+    assert c3.ZRANK(b"z", b"nope") == protocolBuilder(Response.NIL)
+    assert c3.ZRANK(b"z", b"nope", b"WITHSCORE") == protocolBuilder(
+        Response.NIL_ARRAY
+    )
+
+
+def test_zset_persistence_roundtrip():
+    import os
+    import tempfile
+
+    from kagni.db import DB
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = DB(os.path.join(tmp, "k.sqlite"))
+        c = _commands()
+        c.ZADD(b"z", b"1.5", b"a", b"2", b"b")
+        c.HSET(b"h", b"f", b"v")
+        db.dump(c.data.snapshot(), c.data, c.data.epoch)
+        restored = db.load()
+        c2 = Commands(data=Data())
+        for key, value in restored.items():
+            c2.data[key] = value
+        assert c2.ZRANGE(b"z", b"0", b"-1", b"WITHSCORES") == protocolBuilder(
+            [b"a", b"1.5", b"b", b"2"]
+        )
+        assert c2.ZADD(b"z", b"3", b"c") == protocolBuilder(1)
+        assert c2.HGET(b"h", b"f") == protocolBuilder(b"v")

@@ -4,6 +4,8 @@ from math import ceil
 from time import monotonic_ns as monotonic_ns_time
 from time import time_ns as wall_clock_ns
 
+from kagni.zset import ZSet
+
 __all__ = ["Data"]
 
 """
@@ -178,6 +180,26 @@ class Data(MutableMapping):
         entry["expires_at"] = monotonic_ns_time() + expire_secs * (10 ** 9)
         return 1
 
+    def expire_at(self, key, wall_deadline_ns):
+        """Set an absolute wall-clock deadline (EXPIREAT/PEXPIREAT).
+
+        0 for missing or already-expired keys; a past deadline deletes
+        the key and returns 1, like a non-positive relative TTL.
+        """
+        entry = self._storage.get(key)
+        if entry is None:
+            return 0
+        now = monotonic_ns_time()
+        if not self._live(entry, now):
+            del self._storage[key]
+            return 0
+        expires_at = now + (wall_deadline_ns - wall_clock_ns())
+        if expires_at <= now:
+            del self._storage[key]
+            return 1
+        entry["expires_at"] = expires_at
+        return 1
+
     def ttl(self, key):
         entry = self._storage.get(key)
         if entry is None:
@@ -192,6 +214,37 @@ class Data(MutableMapping):
         # ceil so that a freshly expired-away key does not report 0 while
         # still logically alive for the remainder of the nanosecond
         return ceil((expires_at - now) / (10 ** 9))
+
+    def ttl_ms(self, key):
+        """Millisecond TTL (PTTL): redis keeps expiry at ms granularity
+        and reports the remaining whole milliseconds."""
+        entry = self._storage.get(key)
+        if entry is None:
+            return -2
+        now = monotonic_ns_time()
+        expires_at = entry["expires_at"]
+        if expires_at is None:
+            return -1
+        if expires_at <= now:
+            del self._storage[key]
+            return -2
+        # ceil over ns matches redis' floor over its ms clock, so a key
+        # set a fraction of a millisecond ago still reports the full ms
+        return ceil((expires_at - now) / 1_000_000)
+
+    def keyspace_stats(self):
+        """(keys, expiring keys, avg remaining ms) for INFO keyspace."""
+        self._sweep()
+        now = monotonic_ns_time()
+        expires = 0
+        ttl_sum = 0
+        for entry in self._storage.values():
+            expires_at = entry["expires_at"]
+            if expires_at is not None:
+                expires += 1
+                ttl_sum += expires_at - now
+        avg = ttl_sum // expires // 1_000_000 if expires else 0
+        return len(self._storage), expires, avg
 
     def persist(self, key):
         """Remove the TTL of a live key (1), or 0 for missing/expired keys."""
@@ -217,5 +270,7 @@ def _copy_value(value):
     if isinstance(value, deque):  # list
         return deque(value)
     if type(value).__name__ == "BitMap":  # pyroaring, imported lazily
+        return value.copy()
+    if isinstance(value, ZSet):
         return value.copy()
     return value

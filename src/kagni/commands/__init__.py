@@ -5,6 +5,7 @@ from .set import CommandSetMixin as SetMixin
 from .bit import CommandSetMixin as BitMixin
 from .hash import CommandSetMixin as HashMixin
 from .lists import CommandSetMixin as ListMixin
+from .zset import CommandSetMixin as ZSetMixin
 from kagni.constants import Error, Errors, Response
 from kagni.data import Data
 from kagni.resp import protocolBuilder
@@ -28,12 +29,14 @@ class Session:
         self.queue = []
 
 
-class Commands(BasicMixin, SetMixin, BitMixin, HashMixin, ListMixin):
+class Commands(BasicMixin, SetMixin, BitMixin, HashMixin, ListMixin, ZSetMixin):
     def __init__(self, data=None):
         self.data = data if data is not None else Data()
         # optional snapshot backend, wired by the servers; FLUSHDB/FLUSHALL
         # wipe it together with the in-memory state
         self.persistence = None
+        # reported by INFO; the servers set it to the listening port
+        self.tcp_port = 0
 
     # ------------------------------------------------------------ dispatch
     def dispatch(self, request, state=None):

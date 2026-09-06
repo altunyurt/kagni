@@ -1,7 +1,13 @@
 from typing import List
 
 from kagni.constants import Errors, Response
-from .common import KIND_HASH, expect_kind
+from .common import (
+    INT64_MAX,
+    INT64_MIN,
+    KIND_HASH,
+    RE_NUMERIC,
+    expect_kind,
+)
 from .decorator import command_decorator
 
 __all__ = ["CommandSetMixin"]
@@ -14,15 +20,23 @@ class CommandSetMixin:
         return expect_kind(self.data, key, KIND_HASH)
 
     @command_decorator(b"HSET")
-    def HSET(self, key: bytes, field: bytes, val: bytes) -> int:
+    def HSET(self, key: bytes, *field_values: bytes) -> int:
+        """HSET key field value [field value ...] (variadic since redis
+        4.0); replies with the number of fields that were newly added."""
+        if len(field_values) < 2 or len(field_values) % 2:
+            raise Errors.arity("hset")
+
         cur = self._hash(key)
         if cur is None:
-            self.data[key] = {field: val}
-            return 1
-
-        is_new = field not in cur
-        cur[field] = val
-        return 1 if is_new else 0
+            cur = {}
+            self.data[key] = cur
+        new_fields = 0
+        for i in range(0, len(field_values), 2):
+            field, value = field_values[i], field_values[i + 1]
+            if field not in cur:
+                new_fields += 1
+            cur[field] = value
+        return new_fields
 
     @command_decorator(b"HGET")
     def HGET(self, key: bytes, field: bytes) -> (bytes, Response.NIL):
@@ -30,6 +44,17 @@ class CommandSetMixin:
         if cur is None or field not in cur:
             return Response.NIL
         return cur[field]
+
+    @command_decorator(b"HMGET")
+    def HMGET(self, key: bytes, *fields: bytes) -> list:
+        """HMGET key field [field ...]: one reply slot per requested
+        field, nil for missing fields and for a missing key alike."""
+        if not fields:
+            raise Errors.arity("hmget")
+        cur = self._hash(key)
+        if cur is None:
+            return [Response.NIL] * len(fields)
+        return [cur.get(field, Response.NIL) for field in fields]
 
     @command_decorator(b"HEXISTS")
     def HEXISTS(self, key: bytes, field: bytes) -> int:
@@ -56,9 +81,46 @@ class CommandSetMixin:
             self.data.remove(key)
         return removed
 
+    @command_decorator(b"HLEN")
+    def HLEN(self, key: bytes) -> int:
+        cur = self._hash(key)
+        return 0 if cur is None else len(cur)
+
+    @command_decorator(b"HKEYS")
+    def HKEYS(self, key: bytes) -> List[bytes]:
+        cur = self._hash(key)
+        return [] if cur is None else list(cur)
+
+    @command_decorator(b"HVALS")
+    def HVALS(self, key: bytes) -> List[bytes]:
+        cur = self._hash(key)
+        return [] if cur is None else list(cur.values())
+
     @command_decorator(b"HGETALL")
     def HGETALL(self, key: bytes) -> List[bytes]:
         cur = self._hash(key)
         if cur is None:
             return []
         return [b for a in cur.items() for b in a]
+
+    @command_decorator(b"HINCRBY")
+    def HINCRBY(self, key: bytes, field: bytes, increment: int) -> int:
+        """64-bit counter on a hash field (HINCRBY key field increment)."""
+        cur = self._hash(key)
+        if cur is None:
+            cur = {}
+            self.data[key] = cur
+
+        raw = cur.get(field)
+        if raw is None:
+            current = 0
+        elif not RE_NUMERIC.match(raw):
+            raise Errors.HASH_NOT_INT
+        else:
+            current = int(raw, 10)
+
+        result = current + increment
+        if result < INT64_MIN or result > INT64_MAX:
+            raise Errors.OVERFLOW
+        cur[field] = f"{result}".encode()
+        return result

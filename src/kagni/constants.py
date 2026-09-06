@@ -56,7 +56,37 @@ class Errors:
     STRING_OVERFLOW = Error(
         "ERR", "string exceeds maximum allowed size (proto-max-bulk-len)"
     )
+    # sorted-set errors (messages mirror redis 7.4)
+    MIN_MAX_FLOAT = Error("ERR", "min or max is not a float")
+    LEX_RANGE = Error("ERR", "min or max not valid string range item")
+    NAN_RESULT = Error("ERR", "resulting score is not a number (NaN)")
+    ZADD_CONFLICT = Error(
+        "ERR", "GT, LT, and/or NX options at the same time are not compatible"
+    )
+    ZADD_XX_NX = Error(
+        "ERR", "XX and NX options at the same time are not compatible"
+    )
+    ZADD_INCR_PAIR = Error(
+        "ERR", "INCR option supports a single increment-element pair"
+    )
+    LIMIT_NEEDS_BY = Error(
+        "ERR",
+        "syntax error, LIMIT is only supported in combination with either "
+        "BYSCORE or BYLEX",
+    )
+    WITHSCORES_BYLEX = Error(
+        "ERR", "syntax error, WITHSCORES not supported in combination with BYLEX"
+    )
+    WEIGHT_FLOAT = Error("ERR", "weight value is not a float")
+    # hash counter errors
+    HASH_NOT_INT = Error("ERR", "hash value is not an integer")
 
     @staticmethod
     def arity(command):
         return Error("ERR", "wrong number of arguments for '{}' command".format(command))
+
+    @staticmethod
+    def no_keys(command):
+        return Error(
+            "ERR", "at least 1 input key is needed for '{}' command".format(command)
+        )

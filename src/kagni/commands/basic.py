@@ -1,6 +1,8 @@
 from typing import List
 import fnmatch
 import math
+import os
+import platform
 import re
 import time as _wall
 
@@ -13,14 +15,16 @@ from .common import (
     KIND_LIST,
     KIND_SET,
     KIND_STRING,
+    KIND_ZSET,
+    RE_NUMERIC,
+    _format_float,
+    _parse_float,
     expect_kind,
     kind_of,
     string2ll,
 )
 from .decorator import command_decorator
 
-# non-negative or negative decimal integer, e.g. b"0", b"-42"
-RE_NUMERIC = re.compile(rb"-?\d+\Z", re.ASCII)
 
 # redis-compatible cap for a single string value (proto-max-bulk-len)
 MAX_STRING_SIZE = 512 * 1024 * 1024
@@ -56,53 +60,64 @@ TYPE_NAMES = {
     KIND_LIST: "list",
     KIND_HASH: "hash",
     KIND_SET: "set",
+    KIND_ZSET: "zset",
     KIND_BITMAP: "string",
 }
 
 
-# redis parses floats with libc strtold (string2ld in util.c): the full
-# string must parse, no surrounding whitespace, nan rejected; exponents
-# and literal inf are accepted here and rejected later when the result
-# becomes NaN/Infinity.  Underflow-to-zero (ERANGE) is approximated by
-# rejecting non-zero literals that round to 0.0.
-def _parse_float(raw):
-    try:
-        text = raw.decode("ascii")
-    except UnicodeDecodeError:
-        raise Errors.NOT_FLOAT
-    if not text or text != text.strip():
-        raise Errors.NOT_FLOAT
-    try:
-        value = float(text)
-    except ValueError:
-        raise Errors.NOT_FLOAT
-    if math.isnan(value):
-        raise Errors.NOT_FLOAT
-    if math.isinf(value):
-        core = text.lower().lstrip("+-")
-        if core not in ("inf", "infinity"):
-            raise Errors.NOT_FLOAT  # literal overflow (ERANGE)
-    elif value == 0.0 and any(ch in "123456789" for ch in text):
-        raise Errors.NOT_FLOAT  # underflow to zero (ERANGE)
-    return value
+# --------------------------------------------------------------- INFO
+# the sections INFO knows about; unknown section names reply with an
+# empty body (redis behaviour), and the defaults cover everything kagni
+# has
+_INFO_SECTIONS = (b"server", b"keyspace")
 
 
-def _format_float(value):
-    """Format an incrbyfloat result.
+def _info_body(sections, data, port):
+    """INFO reply body: '# Section' blocks with redis' key:value lines.
+    Values describe kagni honestly; redis_version reports the 7.4
+    compatibility target so clients gate their features on it."""
+    wanted = set()
+    for section in sections:
+        section = section.lower()
+        if section in (b"all", b"default", b"everything") or not section:
+            wanted.update(_INFO_SECTIONS)
+        elif section in _INFO_SECTIONS:
+            wanted.add(section)
+    # an unknown section name is not an error: it simply matches nothing
+    blocks = []
+    if b"server" in wanted:
+        blocks.append(
+            "# Server\r\n"
+            "redis_version:7.4.0\r\n"
+            "redis_git_sha1:00000000\r\n"
+            "redis_git_dirty:0\r\n"
+            "redis_build_id:0000000000000000\r\n"
+            "redis_mode:standalone\r\n"
+            "os:%s %s\r\n"
+            "arch_bits:64\r\n"
+            "process_id:%d\r\n"
+            "tcp_port:%d\r\n"
+            "uptime_in_seconds:%d\r\n"
+            % (
+                platform.system(),
+                platform.machine(),
+                os.getpid(),
+                port,
+                int(_wall.monotonic()),
+            )
+        )
+    if b"keyspace" in wanted:
+        keys, expires, avg_ttl = data.keyspace_stats()
+        block = "# Keyspace\r\n"
+        if keys:
+            block += "db0:keys=%d,expires=%d,avg_ttl=%d\r\n" % (
+                keys,
+                expires,
+                avg_ttl,
+            )
+        blocks.append(block)
+    return b"\r\n".join(block.encode() for block in blocks)
 
-    redis prints fixed-point with 17 significant long-double digits
-    (ld2string LD_STR_HUMAN); python floats are doubles, so the shortest
-    round-trip repr is used instead - identical output for the decimal
-    values people type (10.5, 0.1+0.2, ...), and exponents for very
-    large/small magnitudes.  Integral results lose the trailing '.0'
-    and -0 normalises to 0, like redis.  The stored strings always
-    re-parse through _parse_float."""
-    text = repr(value)
-    if text.endswith(".0"):
-        text = text[:-2]
-    if text in ("-0",):
-        text = "0"
-    return text
 
 
 def _expire_time_error(command):
@@ -192,6 +207,10 @@ class CommandSetMixin:
     def PING(self, message: bytes = None) -> (Response.PONG, bytes):
         return message if message is not None else Response.PONG
 
+    @command_decorator(b"ECHO")
+    def ECHO(self, message: bytes) -> bytes:
+        return message
+
     @command_decorator(b"COMMAND")
     def COMMAND(self, *args) -> Response.OK:
         return Response.OK
@@ -249,6 +268,13 @@ class CommandSetMixin:
                 subcommand.decode("ascii", "replace")
             ),
         )
+
+    @command_decorator(b"INFO")
+    def INFO(self, *sections: bytes) -> bytes:
+        """INFO [section ...]: server and keyspace sections (all that
+        kagni tracks), in redis' '# Section' block format.  Unknown
+        section names reply with an empty body, like redis."""
+        return _info_body(sections or (b"default",), self.data, self.tcp_port)
 
     # ------------------------------------------------------------- helpers
     def _string(self, key):
@@ -393,6 +419,18 @@ class CommandSetMixin:
     def EXPIRE(self, key: bytes, secs: int) -> int:
         return self.data.expire(key, secs)
 
+    @command_decorator(b"PEXPIRE")
+    def PEXPIRE(self, key: bytes, ms: int) -> int:
+        return self.data.expire_at(key, _wall.time_ns() + ms * 1_000_000)
+
+    @command_decorator(b"EXPIREAT")
+    def EXPIREAT(self, key: bytes, ts: int) -> int:
+        return self.data.expire_at(key, ts * 1_000_000_000)
+
+    @command_decorator(b"PEXPIREAT")
+    def PEXPIREAT(self, key: bytes, ts: int) -> int:
+        return self.data.expire_at(key, ts * 1_000_000)
+
     @command_decorator(b"PERSIST")
     def PERSIST(self, key: bytes) -> int:
         return self.data.persist(key)
@@ -400,6 +438,10 @@ class CommandSetMixin:
     @command_decorator(b"TTL")
     def TTL(self, key: bytes) -> int:
         return self.data.ttl(key)
+
+    @command_decorator(b"PTTL")
+    def PTTL(self, key: bytes) -> int:
+        return self.data.ttl_ms(key)
 
     @command_decorator(b"KEYS")
     def KEYS(self, pattern: bytes) -> List[bytes]:

@@ -20,7 +20,7 @@ It is a real RESP server that lives comfortably inside Python workflows:
   inspectable with standard tooling.
 
 It is not a Redis replacement where throughput or feature breadth matter:
-expect a modest single-process op rate, a ~80-command subset, and no
+expect a modest single-process op rate, a ~116-command subset, and no
 blocking commands, replication, transactions or pub/sub.
 
 ## Running
@@ -95,17 +95,19 @@ Supervisord also expects foreground processes:
 ## Storage
 
 - Everything lives in memory with lazy key expiry (`EXPIRE`/`TTL`); the sqlite snapshot is a full-table transaction, replaced every `--dump-interval` seconds and restored at boot.
-- Strings are byte strings with redis semantics (counters are strings too). Lists are deques, giving O(1) push/pop at both ends. Bitmaps are roaring bitmaps, so sparse high-offset data stays compact where a redis-style byte string would grow linearly.
+- Strings are byte strings with redis semantics (counters are strings too). Lists are deques, giving O(1) push/pop at both ends. Bitmaps are roaring bitmaps, so sparse high-offset data stays compact where a redis-style byte string would grow linearly. Sorted sets are member→score dicts over a `bisect`-kept `(score, member)` list: rank queries are O(log n), writes shift the list in C, and score ties break on member bytes like redis.
 
 ## Commands
 
 Supported commands, grouped by data type:
 
-| String | List | Set | Hash | Bitmap | Keys / admin |
-| --- | --- | --- | --- | --- | --- |
-| SET (NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL)<br>GET<br>GETSET<br>GETDEL<br>GETEX<br>SETNX<br>SETEX<br>PSETEX<br>MSET<br>MSETNX<br>MGET<br>APPEND<br>STRLEN<br>GETRANGE<br>SETRANGE<br>INCR<br>INCRBY<br>INCRBYFLOAT<br>DECR<br>DECRBY | LPUSH<br>RPUSH<br>LPUSHX<br>RPUSHX<br>LLEN<br>LINDEX<br>LSET<br>LRANGE<br>LTRIM<br>LREM<br>LINSERT<br>LPOP<br>RPOP<br>LMOVE<br>RPOPLPUSH<br>LPOS<br>LMPOP | SADD<br>SCARD<br>SMEMBERS<br>SISMEMBER<br>SREM<br>SPOP<br>SRANDMEMBER<br>SMOVE<br>SDIFF<br>SDIFFSTORE<br>SINTER<br>SINTERSTORE<br>SUNION<br>SUNIONSTORE | HSET<br>HGET<br>HEXISTS<br>HDEL<br>HGETALL | SETBIT<br>GETBIT<br>BITCOUNT<br>BITPOS<br>BITOP | PING<br>COMMAND<br>CONFIG<br>CLIENT<br>TYPE<br>DEL<br>EXPIRE<br>PERSIST<br>TTL<br>KEYS<br>SCAN<br>EXISTS<br>TOUCH<br>DBSIZE<br>MULTI<br>EXEC<br>DISCARD<br>FLUSHDB<br>FLUSHALL |
+| String | List | Set | Hash | Bitmap | Sorted set | Keys / admin |
+| --- | --- | --- | --- | --- | --- | --- |
+| SET (NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL)<br>GET<br>GETSET<br>GETDEL<br>GETEX<br>SETNX<br>SETEX<br>PSETEX<br>MSET<br>MSETNX<br>MGET<br>APPEND<br>STRLEN<br>GETRANGE<br>SETRANGE<br>INCR<br>INCRBY<br>INCRBYFLOAT<br>DECR<br>DECRBY<br>ECHO | LPUSH<br>RPUSH<br>LPUSHX<br>RPUSHX<br>LLEN<br>LINDEX<br>LSET<br>LRANGE<br>LTRIM<br>LREM<br>LINSERT<br>LPOP<br>RPOP<br>LMOVE<br>RPOPLPUSH<br>LPOS<br>LMPOP | SADD<br>SCARD<br>SMEMBERS<br>SISMEMBER<br>SREM<br>SPOP<br>SRANDMEMBER<br>SMOVE<br>SDIFF<br>SDIFFSTORE<br>SINTER<br>SINTERSTORE<br>SUNION<br>SUNIONSTORE | HSET (variadic)<br>HGET<br>HMGET<br>HEXISTS<br>HDEL<br>HLEN<br>HKEYS<br>HVALS<br>HGETALL<br>HINCRBY | SETBIT<br>GETBIT<br>BITCOUNT<br>BITPOS<br>BITOP | ZADD (NX/XX/GT/LT/CH/INCR)<br>ZCARD<br>ZSCORE<br>ZMSCORE<br>ZINCRBY<br>ZRANK/ZREVRANK (WITHSCORE)<br>ZRANGE (BYSCORE/BYLEX/REV/LIMIT/WITHSCORES)<br>ZREVRANGE<br>ZRANGEBYSCORE<br>ZREVRANGEBYSCORE<br>ZRANGEBYLEX<br>ZREVRANGEBYLEX<br>ZCOUNT<br>ZLEXCOUNT<br>ZREM<br>ZREMRANGEBYRANK<br>ZREMRANGEBYSCORE<br>ZREMRANGEBYLEX<br>ZPOPMIN/ZPOPMAX<br>ZRANDMEMBER<br>ZUNION/ZINTER/ZDIFF<br>ZUNIONSTORE/ZINTERSTORE/ZDIFFSTORE | PING<br>COMMAND<br>CONFIG<br>CLIENT<br>INFO<br>TYPE<br>DEL<br>EXPIRE<br>PEXPIRE<br>EXPIREAT<br>PEXPIREAT<br>PERSIST<br>TTL<br>PTTL<br>KEYS<br>SCAN<br>EXISTS<br>TOUCH<br>DBSIZE<br>MULTI<br>EXEC<br>DISCARD<br>FLUSHDB<br>FLUSHALL |
 
-Not implemented (yet): blocking commands (`BLPOP`/`BRPOP`/`BLMOVE`), sorted sets, streams, pub/sub and `WATCH` (`MULTI`/`EXEC`/`DISCARD` are supported).
+Not implemented (yet): blocking commands (`BLPOP`/`BRPOP`/`BLMOVE`), streams,
+pub/sub, `WATCH` (`MULTI`/`EXEC`/`DISCARD` are supported) and `ZSCAN`
+(consistently with `HSCAN`/`SSCAN`).
 
 ## Testing & known gaps
 
@@ -116,9 +118,11 @@ target (the LTS line; the implemented subset behaves identically in 8.x).
 Known gaps, intentionally left
 open:
 
-- **No differential harness against a real redis** — messages and reply
-  shapes are mirrored from source by hand; a redis-py/RESP differential
-  runner would catch drift but needs a redis binary in CI.
+- **Differential harness is manual, not in CI** — `tests/differential.py`
+  replays a ~400-command stream against a real redis and a fresh kagni
+  and requires byte-identical replies; it needs a redis binary, so it
+  runs by hand (`KAGNI_DIFF_REDIS=host:port python tests/differential.py`)
+  rather than in the default suite.
 - **No parser fuzzing** — malformed input is spot-checked; a random-byte
   fuzz loop asserting "only `-ERR Protocol error`, never a crash" is not
   in the suite.
