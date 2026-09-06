@@ -1935,6 +1935,7 @@ def test_bitfield_overflow_modes():
     c.BITFIELD(b"k", b"SET", b"u8", b"0", b"255")
     # WRAP is the default
     assert c.BITFIELD(b"k", b"INCRBY", b"u8", b"0", b"1") == protocolBuilder([0])
+    c.BITFIELD(b"k", b"SET", b"u8", b"0", b"255")
     assert c.BITFIELD(b"k", b"OVERFLOW", b"SAT", b"INCRBY", b"u8", b"0", b"1") == protocolBuilder([255])
     # FAIL replies nil for that slot and writes nothing
     assert c.BITFIELD(b"k", b"OVERFLOW", b"FAIL", b"INCRBY", b"u8", b"0", b"1") == protocolBuilder([Response.NIL])

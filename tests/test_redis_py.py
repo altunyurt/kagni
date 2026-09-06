@@ -300,9 +300,9 @@ def test_lcs(r):
 
 def test_bitfield(r):
     bf = r.bitfield("bf")
-    bf.set("u8", 0, 255).incrby("u8", 0, 1).get("u8")
+    bf.set("u8", 0, 255).incrby("u8", 0, 1).get("u8", 0)
     assert bf.execute() == [0, 0, 0]
     assert r.bitfield("bf").get("u8", 0).execute() == [0]
     op = r.bitfield("bf2")
-    op.overflow("SAT").incrby("u8", 0, 300).get("u8")
+    op.overflow("SAT").incrby("u8", 0, 300).get("u8", 0)
     assert op.execute() == [255, 255]
