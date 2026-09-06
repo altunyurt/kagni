@@ -35,7 +35,9 @@ Requires Python 3.11+ (developed on 3.13).
           [--db PATH] [--dump-interval SECS] [--no-save] [--no-uvloop]
           [--daemon] [--pidfile PATH] [--logfile PATH]
 
-Defaults: `asyncio` loop (uvloop when installed), `localhost:6380`, sqlite file `kagni.sqlite`, snapshot every 20 s.
+Defaults: `asyncio` loop (uvloop when installed), `localhost:6379` (redis'
+port; pass `--port` to run alongside a real redis), sqlite file
+`kagni.sqlite`, snapshot every 20 s.
 
 - TCP and a unix domain socket are additive: `--socket PATH` also listens there, `--port 0` disables TCP.
 - `--db :memory:` runs purely in memory — no file, no restore, no snapshots.
@@ -50,7 +52,7 @@ shutdown. `SIGTERM` shuts the server down gracefully, final snapshot
 included — useful for service managers.
 
     kagni --daemon --pidfile /var/run/kagni.pid --logfile /var/log/kagni.log \
-          --host 127.0.0.1 --port 6380 --db /var/lib/kagni/kagni.sqlite
+          --host 127.0.0.1 --db /var/lib/kagni/kagni.sqlite
 
 Use absolute paths for `--db`/`--logfile`/`--pidfile` in daemon mode.
 
@@ -67,7 +69,7 @@ systemd manages the daemonizing itself, so run kagni in the foreground
     [Service]
     Type=simple
     User=kagni
-    ExecStart=/usr/local/bin/kagni --host 127.0.0.1 --port 6380 \
+    ExecStart=/usr/local/bin/kagni --host 127.0.0.1 \
         --db /var/lib/kagni/kagni.sqlite
     Restart=on-failure
 
@@ -83,7 +85,7 @@ Supervisord also expects foreground processes:
 
     # /etc/supervisor/conf.d/kagni.conf
     [program:kagni]
-    command=/usr/local/bin/kagni --host 127.0.0.1 --port 6380 --db /var/lib/kagni/kagni.sqlite
+    command=/usr/local/bin/kagni --host 127.0.0.1 --db /var/lib/kagni/kagni.sqlite
     user=kagni
     autostart=true
     autorestart=true

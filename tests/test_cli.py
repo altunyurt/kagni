@@ -11,7 +11,7 @@ def test_cli_defaults():
     config = cli._parse([])
     assert config.loop == "asyncio"
     assert config.host == "localhost"
-    assert config.port == 6380
+    assert config.port == 6379
     assert config.socket_path is None
     assert config.dump_interval == 20
     assert config.no_uvloop is False

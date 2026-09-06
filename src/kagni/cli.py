@@ -26,7 +26,9 @@ log = logging.getLogger("kagni")
 
 DEFAULT_DB_PATH = os.environ.get("KAGNI_DB", "kagni.sqlite")
 DEFAULT_HOST = "localhost"
-DEFAULT_PORT = 6380
+# redis' own default port: kagni drops into setups that point at 6379;
+# pass --port to run alongside a real redis on the same host
+DEFAULT_PORT = 6379
 DEFAULT_DUMP_INTERVAL = 20
 
 

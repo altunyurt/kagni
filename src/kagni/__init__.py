@@ -5,7 +5,7 @@ Speaks RESP over TCP / unix sockets; snapshots to sqlite.
 Run it as a package::
 
     uv run kagni --help
-    uv run python -m kagni --loop trio --port 6380
+    uv run python -m kagni --loop trio
 """
 
 try:
