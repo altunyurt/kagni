@@ -103,8 +103,9 @@ and slow-subscriber disconnects - and so are keyspace notifications
 
 The test suite mirrors redis 7.4 semantics per command - happy paths,
 error matrices and wire shapes - plus an end-to-end battery over real
-sockets on both event loops, redis-py driving a live server, and a
-~270-command byte-parity battery against a real redis.  Redis 7.4 is the
+sockets on both event loops, redis-py driving a live server, a ~270-command
+byte-parity battery, and a multi-connection differential (pub/sub,
+keyspace notifications, WATCH) against a real redis.  Redis 7.4 is the
 compatibility target (the LTS line; the implemented subset behaves
 identically in 8.x).  The GitHub Actions workflow runs the suite on
 Python 3.11-3.13, feeds both RESP parsers random bytes
