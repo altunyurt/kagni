@@ -400,12 +400,20 @@ def test_config_get():
     reply = protocolParser(c.dispatch([b"CONFIG", b"GET", b"*"]))
     assert reply == [
         b"appendonly", b"no", b"maxmemory", b"0",
-        b"maxmemory-policy", b"noeviction", b"save", b"",
+        b"maxmemory-policy", b"noeviction",
+        b"notify-keyspace-events", b"",
+        b"save", b"",
     ]
     # arity / unknown subcommand errors
     assert b"wrong number of arguments" in c.dispatch([b"CONFIG", b"GET"])
     reply = c.dispatch([b"CONFIG", b"SET", b"save", b"900 1"])
-    assert b"Unknown CONFIG subcommand" in reply
+    assert b"Unknown option or number of arguments for CONFIG SET - 'save'" in reply
+    # only notify-keyspace-events is settable; flags are validated
+    assert c.dispatch([b"CONFIG", b"SET", b"notify-keyspace-events", b"KQ"]) == (
+        b"-ERR CONFIG SET failed (possibly related to argument "
+        b"'notify-keyspace-events') - Invalid event class character. "
+        b"Use 'Ag$lshzxeKEtmdn'.\r\n"
+    )
     assert b"wrong number of arguments" in c.dispatch([b"CONFIG"])
 
 

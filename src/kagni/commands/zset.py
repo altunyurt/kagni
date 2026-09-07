@@ -179,6 +179,7 @@ class CommandSetMixin:
                 if zset is None:
                     zset = self._create_zset(key)
                 zset.add(member, score)
+                self._after_write(key, "zadd")
                 return _format_float(score).encode()
 
             if current is None:
@@ -193,6 +194,8 @@ class CommandSetMixin:
                     continue
                 if zset.add(member, score):
                     changed += 1
+        if added or changed:
+            self._after_write(key, "zadd")
         return added + changed if ch else added
 
     def _create_zset(self, key):
@@ -211,6 +214,7 @@ class CommandSetMixin:
         if zset is None:
             zset = self._create_zset(key)
         zset.add(member, new_score)
+        self._after_write(key, "zincr")
         return _format_float(new_score).encode()
 
     # ------------------------------------------------------------- basics
@@ -480,6 +484,8 @@ class CommandSetMixin:
         if zset is None:
             return 0
         removed = sum(1 for member in members if zset.remove(member))
+        if removed:
+            self._after_write(key, "zrem")
         self._drop_empty(key, zset)
         return removed
 
@@ -489,6 +495,8 @@ class CommandSetMixin:
         if zset is None:
             return 0
         removed = zset.remove_rank(start, stop)
+        if removed:
+            self._after_write(key, "zremrangebyrank")
         self._drop_empty(key, zset)
         return removed
 
@@ -500,6 +508,8 @@ class CommandSetMixin:
         if zset is None:
             return 0
         removed = zset.remove_score(lo, lo_open, hi, hi_open)
+        if removed:
+            self._after_write(key, "zremrangebyscore")
         self._drop_empty(key, zset)
         return removed
 
@@ -512,6 +522,8 @@ class CommandSetMixin:
         if zset is None or empty:
             return 0
         removed = zset.remove_member(lo, lo_open, hi, hi_open)
+        if removed:
+            self._after_write(key, "zremrangebylex")
         self._drop_empty(key, zset)
         return removed
 
@@ -531,7 +543,10 @@ class CommandSetMixin:
             taken.reverse()  # ZPOPMAX pops the highest first
         if taken:
             zset.remove_rank(start, stop)
+        self._after_write(key, "zpopmin" if left else "zpopmax")
         self._drop_empty(key, zset)
+        if not self.data.is_live(key):
+            self._notify(key, "del")
         return self._interleave(taken, withscores=True)
 
     @command_decorator(b"ZSCAN")
@@ -666,6 +681,8 @@ class CommandSetMixin:
             self.data.remove(dest)
             return 0
         self.data[dest] = result
+        self._after_write(dest, {"zunion": "zunionstore", "zinter": "zinterstore",
+                                 "zdiff": "zdiffstore"}[op])
         return len(result)
 
     @command_decorator(b"ZUNION")

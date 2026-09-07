@@ -20,8 +20,8 @@ It is a real RESP server that lives comfortably inside Python workflows:
   inspectable with standard tooling.
 
 It is not a Redis replacement where throughput or feature breadth matter:
-expect a modest single-process op rate, a ~148-command subset, and no
-blocking commands, replication, streams or `WATCH`.
+expect a modest single-process op rate, a ~150-command subset, and no
+blocking commands, replication or streams.
 
 ## Running
 
@@ -87,15 +87,17 @@ Supported commands, grouped by data type:
 
 | String | List | Set | Hash | Bitmap | Sorted set | Pub/Sub | Keys / admin |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| SET (NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL)<br>GET<br>GETSET<br>GETDEL<br>GETEX<br>SETNX<br>SETEX<br>PSETEX<br>MSET<br>MSETNX<br>MGET<br>APPEND<br>STRLEN<br>GETRANGE<br>SETRANGE<br>INCR<br>INCRBY<br>INCRBYFLOAT<br>DECR<br>DECRBY<br>SUBSTR<br>LCS | LPUSH<br>RPUSH<br>LPUSHX<br>RPUSHX<br>LLEN<br>LINDEX<br>LSET<br>LRANGE<br>LTRIM<br>LREM<br>LINSERT<br>LPOP<br>RPOP<br>LMOVE<br>RPOPLPUSH<br>LPOS<br>LMPOP | SADD<br>SCARD<br>SMEMBERS<br>SISMEMBER<br>SMISMEMBER<br>SREM<br>SPOP<br>SRANDMEMBER<br>SMOVE<br>SDIFF<br>SDIFFSTORE<br>SINTER<br>SINTERCARD<br>SINTERSTORE<br>SUNION<br>SUNIONSTORE<br>SSCAN | HSET (variadic)<br>HGET<br>HMGET<br>HEXISTS<br>HDEL<br>HLEN<br>HKEYS<br>HVALS<br>HGETALL<br>HSTRLEN<br>HINCRBY<br>HINCRBYFLOAT<br>HRANDFIELD<br>HMSET<br>HSETNX<br>HSCAN<br>HEXPIRE/HPEXPIRE/HEXPIREAT/HPEXPIREAT<br>HTTL/HPTTL/HPERSIST/HEXPIRETIME/HPEXPIRETIME | SETBIT<br>GETBIT<br>BITCOUNT<br>BITPOS<br>BITOP<br>BITFIELD/BITFIELD_RO | ZADD (NX/XX/GT/LT/CH/INCR)<br>ZCARD<br>ZSCORE<br>ZMSCORE<br>ZINCRBY<br>ZRANK/ZREVRANK (WITHSCORE)<br>ZRANGE (BYSCORE/BYLEX/REV/LIMIT/WITHSCORES)<br>ZREVRANGE<br>ZRANGEBYSCORE<br>ZREVRANGEBYSCORE<br>ZRANGEBYLEX<br>ZREVRANGEBYLEX<br>ZCOUNT<br>ZLEXCOUNT<br>ZREM<br>ZREMRANGEBYRANK<br>ZREMRANGEBYSCORE<br>ZREMRANGEBYLEX<br>ZPOPMIN/ZPOPMAX<br>ZRANDMEMBER<br>ZSCAN<br>ZUNION/ZINTER/ZDIFF<br>ZUNIONSTORE/ZINTERSTORE/ZDIFFSTORE | SUBSCRIBE<br>UNSUBSCRIBE<br>PSUBSCRIBE<br>PUNSUBSCRIBE<br>PUBLISH<br>PUBSUB (CHANNELS/NUMSUB/NUMPAT) | PING<br>ECHO<br>HELLO (RESP2)<br>COMMAND<br>CONFIG<br>CLIENT<br>INFO<br>TYPE<br>DEL<br>EXPIRE<br>PEXPIRE<br>EXPIREAT<br>PEXPIREAT<br>EXPIRETIME<br>PEXPIRETIME<br>PERSIST<br>TTL<br>PTTL<br>KEYS<br>SCAN<br>EXISTS<br>TOUCH<br>DBSIZE<br>MULTI<br>EXEC<br>DISCARD<br>FLUSHDB<br>FLUSHALL |
+| SET (NX/XX/GET/EX/PX/EXAT/PXAT/KEEPTTL)<br>GET<br>GETSET<br>GETDEL<br>GETEX<br>SETNX<br>SETEX<br>PSETEX<br>MSET<br>MSETNX<br>MGET<br>APPEND<br>STRLEN<br>GETRANGE<br>SETRANGE<br>INCR<br>INCRBY<br>INCRBYFLOAT<br>DECR<br>DECRBY<br>SUBSTR<br>LCS | LPUSH<br>RPUSH<br>LPUSHX<br>RPUSHX<br>LLEN<br>LINDEX<br>LSET<br>LRANGE<br>LTRIM<br>LREM<br>LINSERT<br>LPOP<br>RPOP<br>LMOVE<br>RPOPLPUSH<br>LPOS<br>LMPOP | SADD<br>SCARD<br>SMEMBERS<br>SISMEMBER<br>SMISMEMBER<br>SREM<br>SPOP<br>SRANDMEMBER<br>SMOVE<br>SDIFF<br>SDIFFSTORE<br>SINTER<br>SINTERCARD<br>SINTERSTORE<br>SUNION<br>SUNIONSTORE<br>SSCAN | HSET (variadic)<br>HGET<br>HMGET<br>HEXISTS<br>HDEL<br>HLEN<br>HKEYS<br>HVALS<br>HGETALL<br>HSTRLEN<br>HINCRBY<br>HINCRBYFLOAT<br>HRANDFIELD<br>HMSET<br>HSETNX<br>HSCAN<br>HEXPIRE/HPEXPIRE/HEXPIREAT/HPEXPIREAT<br>HTTL/HPTTL/HPERSIST/HEXPIRETIME/HPEXPIRETIME | SETBIT<br>GETBIT<br>BITCOUNT<br>BITPOS<br>BITOP<br>BITFIELD/BITFIELD_RO | ZADD (NX/XX/GT/LT/CH/INCR)<br>ZCARD<br>ZSCORE<br>ZMSCORE<br>ZINCRBY<br>ZRANK/ZREVRANK (WITHSCORE)<br>ZRANGE (BYSCORE/BYLEX/REV/LIMIT/WITHSCORES)<br>ZREVRANGE<br>ZRANGEBYSCORE<br>ZREVRANGEBYSCORE<br>ZRANGEBYLEX<br>ZREVRANGEBYLEX<br>ZCOUNT<br>ZLEXCOUNT<br>ZREM<br>ZREMRANGEBYRANK<br>ZREMRANGEBYSCORE<br>ZREMRANGEBYLEX<br>ZPOPMIN/ZPOPMAX<br>ZRANDMEMBER<br>ZSCAN<br>ZUNION/ZINTER/ZDIFF<br>ZUNIONSTORE/ZINTERSTORE/ZDIFFSTORE | SUBSCRIBE<br>UNSUBSCRIBE<br>PSUBSCRIBE<br>PUNSUBSCRIBE<br>PUBLISH<br>PUBSUB (CHANNELS/NUMSUB/NUMPAT) | PING<br>ECHO<br>HELLO (RESP2)<br>COMMAND<br>CONFIG (GET + SET notify-keyspace-events)<br>CLIENT<br>INFO<br>TYPE<br>DEL<br>EXPIRE<br>PEXPIRE<br>EXPIREAT<br>PEXPIREAT<br>EXPIRETIME<br>PEXPIRETIME<br>PERSIST<br>TTL<br>PTTL<br>KEYS<br>SCAN<br>EXISTS<br>TOUCH<br>DBSIZE<br>WATCH/UNWATCH<br>MULTI<br>EXEC<br>DISCARD<br>FLUSHDB<br>FLUSHALL |
 
 Not implemented: blocking commands (`BLPOP`/`BRPOP`/`BLMOVE`/`BRPOPLPUSH`/
-`BLMPOP`), streams, `WATCH`, keyspace notifications and sharded pub/sub
-(`SPUBLISH`).  Plain pub/sub (SUBSCRIBE/PSUBSCRIBE/PUBLISH) is
-supported - ephemeral, in-memory fan-out with redis' RESP2 semantics,
-including the subscribed-mode command gate and slow-subscriber
-disconnects; the `--dump-interval` sqlite snapshots never contain
-pub/sub state.
+`BLMPOP`), streams and sharded pub/sub (`SPUBLISH`).  Plain pub/sub
+(SUBSCRIBE/PSUBSCRIBE/PUBLISH) is supported - ephemeral, in-memory fan-out
+with redis' RESP2 semantics, including the subscribed-mode command gate
+and slow-subscriber disconnects - and so are keyspace notifications
+(`CONFIG SET notify-keyspace-events`, the `__keyspace@0__:*` /
+`__keyevent@0__:*` channels) and optimistic transactions
+(`WATCH`/`UNWATCH` abort `EXEC` when a watched key changed).  The
+`--dump-interval` sqlite snapshots never contain pub/sub state.
 
 ## Testing
 
@@ -137,5 +139,5 @@ fixture scopes.  kagni speaks RESP2: point redis-py >= 8 at it with
   doubles and prints fixed-point; kagni prints the shortest round-trip
   repr, so results agree for everyday decimals (`10.5`, `0.1+0.2`) but
   may differ at extreme magnitudes.
-- **`WATCH`, streams and the blocking commands are not implemented** (see
-  the command table), so they have no tests.
+- **Streams and the blocking commands are not implemented** (see the
+  command table), so they have no tests.

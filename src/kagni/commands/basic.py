@@ -24,6 +24,7 @@ from .common import (
     string2ll,
 )
 from .decorator import command_decorator
+from .pubsub import pubsub_command, _session
 
 
 # redis-compatible cap for a single string value (proto-max-bulk-len)
@@ -39,15 +40,17 @@ CONFIG_VALUES = {
 }
 
 
-def _config_get(pattern: bytes) -> list:
+def _config_get(instance, pattern: bytes) -> list:
     """CONFIG GET reply: every matching parameter as name/value pairs,
     or an empty array when nothing matches (redis behaviour)."""
     re_pattern = fnmatch.translate(pattern.decode("utf-8", "surrogateescape"))
     rgx = re.compile(re_pattern.encode("utf-8", "surrogateescape"))
     reply = []
-    for name in sorted(CONFIG_VALUES):
+    values = dict(CONFIG_VALUES)
+    values[b"notify-keyspace-events"] = instance.notify_keyspace_events.encode()
+    for name in sorted(values):
         if rgx.match(name):
-            reply.extend((name, CONFIG_VALUES[name]))
+            reply.extend((name, values[name]))
     return reply
 
 __all__ = ["CommandSetMixin"]
@@ -180,10 +183,9 @@ def _command_table(cls):
     return table
 
 
-# --------------------------------------------------------------- INFO
-# the sections INFO knows about; unknown section names reply with an
-# empty body (redis behaviour), and the defaults cover everything kagni
-# has
+# redis' keyspace-event class per event name (see notifyKeyspaceEvent);
+# class letters gate which notifications CONFIG SET notify-keyspace-events
+# turns on, K/E toggle the keyspace/keyevent channels themselves
 _INFO_SECTIONS = (b"server", b"keyspace")
 
 
@@ -317,7 +319,65 @@ def _expire_wall_deadline(command, unit, raw):
     return value * 1_000_000  # wall-clock nanoseconds
 
 
+_EVENT_CLASS = {
+    "set": "$", "setrange": "$", "append": "$", "incrby": "$",
+    "incrbyfloat": "$", "setbit": "$",
+    "lpush": "l", "rpush": "l", "lpop": "l", "rpop": "l",
+    "ltrim": "l", "lset": "l", "linsert": "l", "lrem": "l",
+    "sadd": "s", "srem": "s", "spop": "s",
+    "sinterstore": "s", "sunionstore": "s", "sdiffstore": "s",
+    "hset": "h", "hdel": "h", "hincrby": "h", "hincrbyfloat": "h",
+    "hexpire": "h", "hpersist": "h",
+    "zadd": "z", "zincr": "z", "zrem": "z", "zpopmin": "z",
+    "zpopmax": "z", "zremrangebyrank": "z", "zremrangebyscore": "z",
+    "zremrangebylex": "z", "zunionstore": "z", "zinterstore": "z",
+    "zdiffstore": "z",
+    "del": "g", "expire": "g", "persist": "g", "expired": "x",
+}
+_ALLOWED_EVENT_FLAGS = frozenset("Ag$lshzxeKEtmdn")
+_DB_EVENTS_PREFIX = "0"  # kagni has a single database
+
 class CommandSetMixin:
+    def _after_write(self, key, event):
+        """Called by every mutating command after a successful write:
+        bumps the key's generation (WATCH) and emits the redis keyspace
+        notification for *event* when notifications are enabled."""
+        self.data.touch(key)
+        self._notify(key, event)
+
+    def _notify(self, key, event):
+        flags = self.notify_keyspace_events
+        if not flags:
+            return
+        event_class = _EVENT_CLASS.get(event)
+        if event_class is None or ("A" not in flags and event_class not in flags):
+            return
+        db = _DB_EVENTS_PREFIX.encode()
+        if "K" in flags:
+            self.hub.publish(b"__keyspace@%s__:" % db + key, event.encode())
+        if "E" in flags:
+            self.hub.publish(b"__keyevent@%s__:" % db + event.encode(), key)
+
+    def _on_key_expired(self, key):
+        """Data.on_purge callback: a key was lazily found expired."""
+        self._notify(key, "expired")
+
+    @pubsub_command(b"WATCH", 1)
+    def WATCH(self, *keys):
+        """WATCH key [key ...]: snapshot the keys' write generations so
+        a later EXEC aborts when any of them changed."""
+        session = _session(self)
+        for key in keys:
+            session.watched[key] = (self.data.generation(key), self.data.is_live(key))
+        return Response.OK
+
+    @pubsub_command(b"UNWATCH", 0)
+    def UNWATCH(self):
+        """Drop every watched key."""
+        session = _session(self)
+        session.watched.clear()
+        return Response.OK
+
     @command_decorator(b"PING")
     def PING(self, message: bytes = None) -> (Response.PONG, bytes):
         return message if message is not None else Response.PONG
@@ -470,7 +530,29 @@ class CommandSetMixin:
         if subcommand == b"GET":
             if len(args) != 2:
                 raise Errors.arity("config|get")
-            return _config_get(args[1])
+            return _config_get(self, args[1])
+        if subcommand == b"SET":
+            if len(args) != 3:
+                raise Errors.arity("config|set")
+            param = args[1].lower()
+            if param == b"notify-keyspace-events":
+                value = args[2]
+                for char in value.decode("ascii", "replace"):
+                    if char not in _ALLOWED_EVENT_FLAGS:
+                        raise Error(
+                            "ERR",
+                            "CONFIG SET failed (possibly related to argument "
+                            "'notify-keyspace-events') - Invalid event class "
+                            "character. Use 'Ag$lshzxeKEtmdn'.",
+                        )
+                self.notify_keyspace_events = value.decode("ascii")
+                return Response.OK
+            raise Error(
+                "ERR",
+                "Unknown option or number of arguments for CONFIG SET - '{}'".format(
+                    args[1].decode("ascii", "replace")
+                ),
+            )
         raise Error(
             "ERR",
             "Unknown CONFIG subcommand or wrong number of arguments for {}".format(
@@ -518,6 +600,9 @@ class CommandSetMixin:
             wall_deadline_ns=deadline,
             keep_ttl=b"KEEPTTL" in flags,
         )
+        self._after_write(key, "set")
+        if deadline is not None:
+            self._notify(key, "expire")  # SET with EX/PX/EXAT/PXAT
         # with GET the reply is always the old value (or nil when the key
         # did not exist), otherwise +OK
         return old if old is not None else (Response.NIL if b"GET" in flags else Response.OK)
@@ -529,18 +614,23 @@ class CommandSetMixin:
         if len(val) > MAX_STRING_SIZE:
             raise Errors.STRING_OVERFLOW
         self.data.set(key, val)
+        self._after_write(key, "set")
         return 1
 
     @command_decorator(b"SETEX")
     def SETEX(self, key: bytes, secs: int, val: bytes) -> Response.OK:
         deadline = _expire_wall_deadline("setex", b"EX", str(secs).encode())
         self.data.set(key, val, wall_deadline_ns=deadline)
+        self._after_write(key, "set")
+        self._notify(key, "expire")
         return Response.OK
 
     @command_decorator(b"PSETEX")
     def PSETEX(self, key: bytes, ms: int, val: bytes) -> Response.OK:
         deadline = _expire_wall_deadline("psetex", b"PX", str(ms).encode())
         self.data.set(key, val, wall_deadline_ns=deadline)
+        self._after_write(key, "set")
+        self._notify(key, "expire")
         return Response.OK
 
     @command_decorator(b"GET")
@@ -554,6 +644,7 @@ class CommandSetMixin:
         if val is None:
             return Response.NIL
         self.data.remove(key)
+        self._after_write(key, "del")
         return val
 
     @command_decorator(b"GETEX")
@@ -568,13 +659,16 @@ class CommandSetMixin:
 
         if b"PERSIST" in flags:
             self.data.persist(key)
+            self._after_write(key, "persist")
         elif unit:
             deadline = _expire_wall_deadline("getex", unit, raw)
             if deadline <= _wall.time_ns():
                 # EXAT/PXAT in the past: redis replies the value and deletes
                 self.data.remove(key)
+                self._after_write(key, "del")
             else:
                 self.data.set(key, val, wall_deadline_ns=deadline)
+                self._after_write(key, "expire")
         return val
 
     @command_decorator(b"GETSET")
@@ -583,6 +677,7 @@ class CommandSetMixin:
         if len(val) > MAX_STRING_SIZE:
             raise Errors.STRING_OVERFLOW
         self.data[key] = val
+        self._after_write(key, "set")
         return Response.NIL if retval is None else retval
 
     @command_decorator(b"MGET")
@@ -603,6 +698,8 @@ class CommandSetMixin:
             if len(value) > MAX_STRING_SIZE:
                 raise Errors.STRING_OVERFLOW
         self.data.update(zip(args[::2], args[1::2]))
+        for key in args[::2]:
+            self._after_write(key, "set")
         return Response.OK
 
     @command_decorator(b"MSETNX")
@@ -616,33 +713,62 @@ class CommandSetMixin:
             if len(value) > MAX_STRING_SIZE:
                 raise Errors.STRING_OVERFLOW
         self.data.update(zip(keys, args[1::2]))
+        for key in keys:
+            self._after_write(key, "set")
         return 1
 
     @command_decorator(b"DEL")
     def DEL(self, *keys) -> int:
         if not keys:
             raise Errors.arity("del")
-        return sum(self.data.remove(key) for key in keys)
+        removed = 0
+        for key in keys:
+            if self.data.remove(key):
+                removed += 1
+                self._after_write(key, "del")
+        return removed
+
+    def _expire_notify(self, key, result, live_before):
+        """EXPIRE-family events: deleting a live key fires 'del', a new
+        deadline 'expire' (redis behaves the same for all four)."""
+        if not result:
+            return
+        self._after_write(key, "del" if live_before and not self.data.is_live(key) else "expire")
 
     @command_decorator(b"EXPIRE")
     def EXPIRE(self, key: bytes, secs: int) -> int:
-        return self.data.expire(key, secs)
+        live_before = self.data.is_live(key)
+        result = self.data.expire(key, secs)
+        self._expire_notify(key, result, live_before)
+        return result
 
     @command_decorator(b"PEXPIRE")
     def PEXPIRE(self, key: bytes, ms: int) -> int:
-        return self.data.expire_at(key, _wall.time_ns() + ms * 1_000_000)
+        live_before = self.data.is_live(key)
+        result = self.data.expire_at(key, _wall.time_ns() + ms * 1_000_000)
+        self._expire_notify(key, result, live_before)
+        return result
 
     @command_decorator(b"EXPIREAT")
     def EXPIREAT(self, key: bytes, ts: int) -> int:
-        return self.data.expire_at(key, ts * 1_000_000_000)
+        live_before = self.data.is_live(key)
+        result = self.data.expire_at(key, ts * 1_000_000_000)
+        self._expire_notify(key, result, live_before)
+        return result
 
     @command_decorator(b"PEXPIREAT")
     def PEXPIREAT(self, key: bytes, ts: int) -> int:
-        return self.data.expire_at(key, ts * 1_000_000)
+        live_before = self.data.is_live(key)
+        result = self.data.expire_at(key, ts * 1_000_000)
+        self._expire_notify(key, result, live_before)
+        return result
 
     @command_decorator(b"PERSIST")
     def PERSIST(self, key: bytes) -> int:
-        return self.data.persist(key)
+        result = self.data.persist(key)
+        if result:
+            self._after_write(key, "persist")
+        return result
 
     @command_decorator(b"EXPIRETIME")
     def EXPIRETIME(self, key: bytes) -> int:
@@ -773,6 +899,7 @@ class CommandSetMixin:
         # keep_ttl: redis counters update the value without touching the
         # key's expiration (only the SET family clears TTLs)
         self.data.set(key, f"{result}".encode(), keep_ttl=True)
+        self._after_write(key, "incrby")
         return result
 
     @command_decorator(b"INCRBY")
@@ -796,6 +923,7 @@ class CommandSetMixin:
         text = _format_float(result)
         # keep_ttl: like INCR, INCRBYFLOAT leaves an existing TTL alone
         self.data.set(key, text.encode(), keep_ttl=True)
+        self._after_write(key, "incrbyfloat")
         return text.encode()
 
     @command_decorator(b"DECRBY")
@@ -1010,6 +1138,7 @@ class CommandSetMixin:
         # keep_ttl: SETRANGE edits the string in place in redis and leaves
         # an existing TTL alone (unlike SET/GETSET)
         self.data.set(key, val, keep_ttl=True)
+        self._after_write(key, "setrange")
         return len(val)
 
     # ---------------------------------------------------------------- misc
@@ -1044,6 +1173,7 @@ class CommandSetMixin:
         # keep_ttl: redis APPEND appends in place and leaves an existing
         # TTL alone
         self.data.set(key, value, keep_ttl=True)
+        self._after_write(key, "append")
         return len(value)
 
     @command_decorator(b"STRLEN")

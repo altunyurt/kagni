@@ -47,6 +47,12 @@ class Data(MutableMapping):
         # bumped by clear(): lets an in-flight snapshot commit detect that
         # it predates a FLUSHDB and stand down (see db.DB.dump)
         self.epoch = 0
+        # per-key write generations: WATCH snapshots them and EXEC aborts
+        # when one moved (every mutating command touches its keys)
+        self._generations = {}
+        # optional callback fired when an expired entry is purged (the
+        # command layer publishes redis' "expired" keyspace event)
+        self.on_purge = None
 
     # ------------------------------------------------------------------ reads
     def _live(self, entry, now):
@@ -64,7 +70,7 @@ class Data(MutableMapping):
         if entry is None:
             return default
         if not self._live(entry, monotonic_ns_time()):
-            del self._storage[key]
+            self._purge_key(key)
             return default
         return entry["value"]
 
@@ -81,8 +87,15 @@ class Data(MutableMapping):
             if not self._live(entry, now)
         ]
         for key in dead:
-            del self._storage[key]
+            self._purge_key(key)
         return len(dead)
+
+    def _purge_key(self, key):
+        """Physically remove an expired key (after the caller verified
+        it is dead); fires the on_purge callback for keyspace events."""
+        del self._storage[key]
+        if self.on_purge is not None:
+            self.on_purge(key)
 
     def __iter__(self):
         self._sweep()
@@ -102,6 +115,7 @@ class Data(MutableMapping):
         any snapshot taken before the flush fail its commit guard.
         """
         self._storage.clear()
+        self._generations.clear()
         self.epoch += 1
 
     def snapshot(self):
@@ -135,7 +149,7 @@ class Data(MutableMapping):
             else:
                 out[key] = (_copy_value(entry["value"]), now_wall + (expires_at - now))
         for key in dead:
-            del self._storage[key]
+            self._purge_key(key)
         return out
 
     def restore(self, snapshot):
@@ -186,6 +200,21 @@ class Data(MutableMapping):
         # plain store: no expiry (commands use set()/expire()/expire_at())
         self._storage[key] = {"value": val, "expires_at": None}
 
+    def touch(self, key):
+        """Bump a key's write generation (called by every mutating
+        command after a successful write; WATCH aborts EXEC when the
+        generation moved)."""
+        self._generations[key] = self._generations.get(key, 0) + 1
+
+    def generation(self, key):
+        return self._generations.get(key, 0)
+
+    def is_live(self, key):
+        """True when the key exists and has not expired (no purging:
+        WATCH uses it to spot passive expirations)."""
+        entry = self._storage.get(key)
+        return entry is not None and self._live(entry, monotonic_ns_time())
+
     def __delitem__(self, key):
         """Delete the key (live or expired); return 1 if a live value was
         removed, 0 otherwise.  Missing keys silently return 0."""
@@ -209,7 +238,7 @@ class Data(MutableMapping):
         if entry is None:
             return 0
         if not self._live(entry, monotonic_ns_time()):
-            del self._storage[key]
+            self._purge_key(key)
             return 0
         if expire_secs <= 0:
             del self._storage[key]
@@ -228,7 +257,7 @@ class Data(MutableMapping):
             return 0
         now = monotonic_ns_time()
         if not self._live(entry, now):
-            del self._storage[key]
+            self._purge_key(key)
             return 0
         expires_at = now + (wall_deadline_ns - wall_clock_ns())
         if expires_at <= now:
@@ -261,7 +290,7 @@ class Data(MutableMapping):
         if expires_at is None:
             return -1
         if expires_at <= now:
-            del self._storage[key]
+            self._purge_key(key)
             return -2
         return wall_clock_ns() + (expires_at - now)
 
@@ -276,7 +305,7 @@ class Data(MutableMapping):
         if expires_at is None:
             return -1
         if expires_at <= now:
-            del self._storage[key]
+            self._purge_key(key)
             return -2
         # ceil over ns matches redis' floor over its ms clock, so a key
         # set a fraction of a millisecond ago still reports the full ms
@@ -304,6 +333,8 @@ class Data(MutableMapping):
         if not self._live(entry, monotonic_ns_time()):
             del self._storage[key]
             return 0
+        if entry["expires_at"] is None:
+            return 0  # nothing to persist: no TTL, like redis
         entry["expires_at"] = None
         return 1
 

@@ -55,10 +55,14 @@ class CommandSetMixin:
         cur = self._set(key)
         if cur is None:
             self.data[key] = set(vals)
+            self._after_write(key, "sadd")
             return len(set(vals))
         before = len(cur)
         cur.update(vals)
-        return len(cur) - before
+        added = len(cur) - before
+        if added:
+            self._after_write(key, "sadd")
+        return added
 
     @command_decorator(b"SCARD")
     def SCARD(self, key: bytes) -> int:
@@ -86,9 +90,13 @@ class CommandSetMixin:
             if member in cur:
                 cur.discard(member)
                 removed += 1
+        if removed:
+            self._after_write(key, "srem")
         if not cur:
             # redis: the key disappears with its last member
             self.data.remove(key)
+            if removed:
+                self._notify(key, "del")
         return removed
 
     @command_decorator(b"SDIFF")
@@ -98,11 +106,12 @@ class CommandSetMixin:
         result = reduce(sub, sets[1:], set(sets[0]) if sets else set())
         return list(result)
 
-    def _store_result(self, target, result):
+    def _store_result(self, target, result, event):
         """Store a computed set; an empty result deletes the target, like
         redis (empty collections never persist)."""
         if result:
             self.data[target] = result
+            self._after_write(target, event)
         else:
             self.data.remove(target)
         return len(result)
@@ -113,7 +122,7 @@ class CommandSetMixin:
         sets = self._sets(keys)
         # copy the first set: the stored result must never alias a source
         result = reduce(sub, sets[1:], set(sets[0]) if sets else set())
-        return self._store_result(target, result)
+        return self._store_result(target, result, "sdiffstore")
 
     @command_decorator(b"SINTER")
     def SINTER(self, *keys: List[bytes]) -> list:
@@ -167,7 +176,7 @@ class CommandSetMixin:
         self._assert_keys(keys, "sinterstore")
         sets = self._sets(keys)
         result = reduce(and_, sets[1:], set(sets[0]) if sets else set())
-        return self._store_result(target, result)
+        return self._store_result(target, result, "sinterstore")
 
     @command_decorator(b"SSCAN")
     def SSCAN(self, key: bytes, cursor: bytes, *options: bytes):
@@ -213,9 +222,12 @@ class CommandSetMixin:
             dst = set()
             self.data[target] = dst
         dst.add(val)
+        self._after_write(source, "srem")
         if not src:
             # redis: an emptied source disappears
             self.data.remove(source)
+            self._notify(source, "del")
+        self._after_write(target, "sadd")
         return 1
 
     @command_decorator(b"SPOP")
@@ -229,9 +241,11 @@ class CommandSetMixin:
 
         if count is None:
             val = cur.pop()
+            self._after_write(key, "spop")
             if not cur:
                 # redis: the key disappears with its last member
                 self.data.remove(key)
+                self._notify(key, "del")
             return val
 
         if count == 0:
@@ -239,8 +253,11 @@ class CommandSetMixin:
         if count >= len(cur):
             # popping everything removes the key, like redis
             popped = list(cur)
+            self._after_write(key, "spop")
             self.data.remove(key)
+            self._notify(key, "del")
             return popped
+        self._after_write(key, "spop")
         return [cur.pop() for _ in range(count)]
 
     @command_decorator(b"SRANDMEMBER")
@@ -274,4 +291,4 @@ class CommandSetMixin:
         self._assert_keys(keys, "sunionstore")
         sets = self._sets(keys)
         result = reduce(or_, sets[1:], set(sets[0]) if sets else set())
-        return self._store_result(target, result)
+        return self._store_result(target, result, "sunionstore")

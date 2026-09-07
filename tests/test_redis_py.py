@@ -369,3 +369,61 @@ def test_pubsub(kagni_server):
         pubsub.close()
         client.close()
         other.close()
+
+
+def test_keyspace_notifications(kagni_server):
+    client = redis.Redis(host=kagni_server.host, port=kagni_server.port, protocol=2)
+    other = redis.Redis(host=kagni_server.host, port=kagni_server.port, protocol=2)
+    pubsub = client.pubsub()
+    try:
+        assert client.config_set("notify-keyspace-events", "AKE") is True
+        assert client.config_get("notify-keyspace-events") == {
+            "notify-keyspace-events": "AKE"
+        }
+        pubsub.psubscribe("__keyevent@0__:set", "__keyevent@0__:del")
+        other.set("nk", "v")
+        seen = []
+        for _ in range(50):
+            message = pubsub.get_message(timeout=0.1)
+            if message and message["type"] == "pmessage":
+                seen.append((message["channel"], message["data"]))
+                if len(seen) >= 2:
+                    break
+        assert (b"__keyevent@0__:set", b"nk") in seen
+        other.delete("nk")
+        for _ in range(50):
+            message = pubsub.get_message(timeout=0.1)
+            if message and message["type"] == "pmessage" and message["channel"] == b"__keyevent@0__:del":
+                assert message["data"] == b"nk"
+                break
+        else:
+            raise AssertionError("del event not received")
+        assert client.config_set("notify-keyspace-events", "") is True
+    finally:
+        pubsub.close()
+        client.close()
+        other.close()
+
+
+def test_watch_aborts_transactions(kagni_server):
+    client = redis.Redis(host=kagni_server.host, port=kagni_server.port, protocol=2)
+    other = redis.Redis(host=kagni_server.host, port=kagni_server.port, protocol=2)
+    try:
+        other.set("wk", "1")
+        pipe = client.pipeline(transaction=True)
+        pipe.watch("wk")
+        other.set("wk", "2")  # the watched key moves
+        pipe.multi()
+        pipe.set("untouched", "x")
+        with pytest.raises(redis.exceptions.WatchError):
+            pipe.execute()
+        assert other.get("untouched") is None  # transaction aborted
+        # without interference the transaction commits
+        pipe = client.pipeline(transaction=True)
+        pipe.watch("wk")
+        pipe.multi()
+        pipe.incr("wk")
+        assert pipe.execute() == [3]
+    finally:
+        client.close()
+        other.close()

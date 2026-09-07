@@ -40,6 +40,13 @@ class CommandSetMixin:
         if not lst:
             self.data.remove(key)
 
+    def _pop_notify(self, key, left):
+        """Events for a successful pop: the pop itself, plus 'del' when
+        the list emptied out (redis fires both)."""
+        self._after_write(key, "lpop" if left else "rpop")
+        if not self.data.is_live(key):
+            self._notify(key, "del")
+
     def _require_value(self, vals, command):
         if not vals:
             raise Errors.arity(command)
@@ -55,6 +62,8 @@ class CommandSetMixin:
             lst.extendleft(vals)  # last argument ends up at the head
         else:
             lst.extend(vals)
+        # redis reports lpush/rpush for the pushx variants too
+        self._after_write(key, "lpush" if left else "rpush")
         return len(lst)
 
     # -------------------------------------------------------------- pushes
@@ -134,11 +143,13 @@ class CommandSetMixin:
         if count is None:
             val = popfn()
             self._drop_empty(key, lst)
+            self._pop_notify(key, left)
             return val
 
         n = min(count, len(lst))
         popped = [popfn() for _ in range(n)]
         self._drop_empty(key, lst)
+        self._pop_notify(key, left)
         return popped
 
     @command_decorator(b"LPOP")
@@ -160,6 +171,7 @@ class CommandSetMixin:
         if i < 0 or i >= length:
             raise Errors.INDEX_RANGE
         lst[i] = val
+        self._after_write(key, "lset")
         return Response.OK
 
     @command_decorator(b"LTRIM")
@@ -181,6 +193,8 @@ class CommandSetMixin:
             return Response.OK
         if end >= length:
             end = length - 1
+        # redis fires ltrim even for a no-op trim of an existing list
+        self._after_write(key, "ltrim")
         if start == 0 and end == length - 1:
             return Response.OK  # trim to the full list is a no-op
         # keep_ttl: redis LTRIM trims in place and leaves the TTL alone
@@ -212,11 +226,13 @@ class CommandSetMixin:
                     kept.appendleft(item)
 
         if removed:
+            self._after_write(key, "lrem")
             if kept:
                 # keep_ttl: redis LREM trims in place and leaves the TTL alone
                 self.data.set(key, kept, keep_ttl=True)
             else:
                 self.data.remove(key)
+                self._notify(key, "del")
         return removed
 
     @command_decorator(b"LINSERT")
@@ -235,6 +251,7 @@ class CommandSetMixin:
         for i, item in enumerate(lst):
             if item == pivot:
                 lst.insert(i + offset, val)
+                self._after_write(key, "linsert")
                 return len(lst)
         return -1
 
@@ -271,8 +288,12 @@ class CommandSetMixin:
         else:
             dst.append(value)
 
+        # events like redis: destination push first, then source pop
+        self._after_write(destination, "lpush" if to_left else "rpush")
+        self._after_write(source, "lpop" if from_left else "rpop")
         if dst is not src and not src:
             self.data.remove(source)
+            self._notify(source, "del")
         return value
 
     @command_decorator(b"LMOVE")
@@ -339,6 +360,7 @@ class CommandSetMixin:
             n = min(count, len(lst))
             popped = [popfn() for _ in range(n)]
             self._drop_empty(key, lst)
+            self._pop_notify(key, from_left)
             return [key, popped]
 
         return Response.NIL_ARRAY

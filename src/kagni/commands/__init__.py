@@ -33,6 +33,17 @@ _GATE_TEXT = (
 _SUBCOMMAND_COMMANDS = frozenset(("CLIENT", "CONFIG", "COMMAND", "PUBSUB"))
 
 
+
+def _unknown_command_frame(raw_name, args):
+    """redis 8 spells unknown commands with an argument summary:
+    "unknown command 'X', with args beginning with: 'a' 'b' " (each
+    argument capped at 128 bytes, a trailing space included).  Built as
+    raw bytes: arguments may hold arbitrary bytes (surrogates included)
+    that must not round-trip through a text encode."""
+    summary = b"".join(b"'%s' " % arg[:128] for arg in args)
+    return b"-ERR unknown command '" + raw_name.encode("ascii", "replace")         + b"', with args beginning with: " + summary + b"\r\n"
+
+
 def _gate_label(request):
     """redis labels subcommands in the gate error as 'name|sub' (e.g.
     'client|setname', 'pubsub|numpat')."""
@@ -54,7 +65,10 @@ class Session:
     command layer is unit-tested).
     """
 
-    __slots__ = ("in_multi", "queue", "channels", "patterns", "sender", "outbox")
+    __slots__ = (
+        "in_multi", "queue", "channels", "patterns", "sender", "outbox",
+        "watched", "dirty",
+    )
 
     def __init__(self):
         self.in_multi = False
@@ -63,6 +77,10 @@ class Session:
         self.patterns = _builtin_set()
         self.sender = None
         self.outbox = []
+        # WATCH: key -> (generation, was live) taken at WATCH time; EXEC
+        # aborts when a generation moved or a watched key expired away
+        self.watched = {}
+        self.dirty = False
 
     @property
     def subscription_count(self):
@@ -95,6 +113,10 @@ class Commands(
         self.hub = PubSubHub()
         # the connection being served right now, for pub/sub handlers
         self._session = None
+        # redis' notify-keyspace-events flags ("" = off); set via
+        # CONFIG SET notify-keyspace-events, like redis
+        self.notify_keyspace_events = ""
+        self.data.on_purge = self._on_key_expired
 
     # ------------------------------------------------------------ dispatch
     def dispatch(self, request, state=None):
@@ -159,9 +181,7 @@ class Commands(
 
         handler = getattr(self, name, None)
         if handler is None:
-            return protocolBuilder(
-                Error("ERR", "unknown command '{}'".format(raw_name))
-            )
+            return _unknown_command_frame(raw_name, request[1:])
 
         args = request[1:]
         if len(args) < handler.min_args or (
@@ -186,9 +206,10 @@ class Commands(
                 return protocolBuilder(Errors.arity("ping"))
             return protocolBuilder([b"pong", args[0] if args else b""])
 
-        if name in SUBSCRIBE_COMMANDS:
+        if name in SUBSCRIBE_COMMANDS or name in ("WATCH", "UNWATCH"):
             # pub/sub handlers push their frames through the session and
-            # return raw values (or None); they need the session bound
+            # return raw values (or None); WATCH/UNWATCH need the
+            # session bound too - both bypass the decorator encoding
             previous = self._session
             self._session = session
             try:
@@ -218,6 +239,17 @@ class Commands(
             queued = state.queue
             state.queue = []
             state.in_multi = False
+            # WATCH: abort when any watched key was written since (its
+            # generation moved) or expired away while the transaction
+            # was queued
+            dirty = any(
+                self.data.generation(key) != generation
+                or self.data.is_live(key) != was_live
+                for key, (generation, was_live) in state.watched.items()
+            )
+            state.watched.clear()
+            if dirty:
+                return protocolBuilder(Response.NIL_ARRAY)
             if not queued:
                 return protocolBuilder([])  # empty array, like redis
             # every queued dispatch returns a complete, self-delimiting
@@ -250,17 +282,19 @@ class Commands(
         if name == "DISCARD":
             state.queue = []
             state.in_multi = False
+            state.watched.clear()
             return protocolBuilder(Response.OK)
         if name == "MULTI":
             return protocolBuilder(Error("ERR", "MULTI calls can not be nested"))
+        if name == "WATCH":
+            # redis refuses to queue WATCH inside a transaction
+            return protocolBuilder(Error("ERR", "WATCH inside MULTI is not allowed"))
 
         # mirror the direct-path validation so queue-time errors are
         # answered immediately and the command is not queued
         handler = getattr(self, name, None)
         if handler is None:
-            return protocolBuilder(
-                Error("ERR", "unknown command '{}'".format(raw_name))
-            )
+            return _unknown_command_frame(raw_name, request[1:])
         args = request[1:]
         if len(args) < handler.min_args or (
             handler.max_args is not None and len(args) > handler.max_args

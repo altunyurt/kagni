@@ -137,6 +137,7 @@ class CommandSetMixin:
             if self._field(cur, field) is None:
                 new_fields += 1
             self._put(cur, field, value)  # a SET always clears the TTL
+        self._after_write(key, "hset")
         return new_fields
 
     @command_decorator(b"HSETNX")
@@ -149,6 +150,7 @@ class CommandSetMixin:
             cur = {}
             self.data[key] = cur
         self._put(cur, field, val)
+        self._after_write(key, "hset")
         return 1
 
     # ---------------------------------------------------------------- reads
@@ -195,7 +197,13 @@ class CommandSetMixin:
             if self._field(cur, field) is not None:
                 del cur[field]
                 removed += 1
-        self._drop_if_empty(key, cur)
+        if removed:
+            self._after_write(key, "hdel")
+        if not cur:
+            # redis: the key disappears with its last field
+            self.data.remove(key)
+            if removed:
+                self._notify(key, "del")
         return removed
 
     @command_decorator(b"HLEN")
@@ -330,6 +338,7 @@ class CommandSetMixin:
         if result < INT64_MIN or result > INT64_MAX:
             raise Errors.OVERFLOW
         self._put(cur, field, f"{result}".encode(), deadline)
+        self._after_write(key, "hincrby")
         return result
 
     @command_decorator(b"HINCRBYFLOAT")
@@ -359,6 +368,7 @@ class CommandSetMixin:
             raise Errors.FLOAT_OVERFLOW
         text = _format_float(result)
         self._put(cur, field, text.encode(), deadline)
+        self._after_write(key, "hincrbyfloat")
         return text.encode()
 
     # ---------------------------------------------- field-level expiries
@@ -487,6 +497,10 @@ class CommandSetMixin:
                 continue
             self._put(cur, field, value, new_deadline)
             out.append(1)
+        if any(result in (1, 2) for result in out):
+            self._after_write(key, "hexpire")
+            if not cur:
+                self._notify(key, "del")
         self._drop_if_empty(key, cur)
         return out
 
@@ -514,6 +528,7 @@ class CommandSetMixin:
         cur = self._hash(key)
         out = []
         now = _wall.time_ns()
+        persisted = 0
         for field in fields:
             live = self._field(cur, field) if cur is not None else None
             if live is None:
@@ -526,6 +541,7 @@ class CommandSetMixin:
                 else:
                     self._put(cur, field, value)
                     out.append(1)
+                    persisted += 1
                 continue
             if deadline is None:
                 out.append(-1)
@@ -539,6 +555,8 @@ class CommandSetMixin:
                 out.append(deadline // 10 ** 9)
             else:  # pexpiretime
                 out.append(deadline // 10 ** 6)
+        if persisted:
+            self._after_write(key, "hpersist")
         self._drop_if_empty(key, cur)
         return out
 

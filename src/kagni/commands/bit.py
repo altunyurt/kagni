@@ -132,6 +132,8 @@ class CommandSetMixin:
             bmap.add(bit)
         elif previous:
             bmap.remove(bit)
+        if previous != val:
+            self._after_write(key, "setbit")
         return previous
 
     @command_decorator(b"GETBIT")
@@ -182,6 +184,7 @@ class CommandSetMixin:
 
         if len(result):
             self.data[dest_name] = result
+            self._after_write(dest_name, "set")
         else:
             # redis deletes the destination when the result is empty
             self.data.remove(dest_name)
@@ -307,4 +310,6 @@ class CommandSetMixin:
             # writes into an existing bitmap already mutated the stored
             # object in place; only a fresh key needs storing
             self.data[key] = bmap
+        if wrote:
+            self._after_write(key, "setbit")
         return out
