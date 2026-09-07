@@ -15,7 +15,7 @@ from kagni.commands import Commands
 from kagni.data import Data
 from kagni.resp import RESPReader, ProtocolError
 
-from .test_regressions import _readers  # one reader per parse engine
+from .helpers import _readers  # one reader per parse engine
 
 
 def _reader_engines():

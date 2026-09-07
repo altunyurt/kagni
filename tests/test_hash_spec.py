@@ -1,136 +1,111 @@
-from kagni.constants import Response
+"""Hash commands: assert-style spec battery (converted from the
+former *_sequence.py table; one function per scenario)."""
 
-"""Spec-table battery for the hash commands, one pytest case per row
-(converted from the former table-runner format)."""
+from kagni.constants import Response, SimpleString
+from kagni.resp import protocolBuilder, protocolParser
 
-import pytest
-
-from .spec_runner import run_spec_item
-
-ITEMS = [
-{
-            "name": "Check HSET return value for nonexisting key",
-            "command": "HSET",
-            "args": [b"k", b"f", b"123"],
-            "returns": 1,
-            "expects": lambda cmds: cmds.data[b"k"][b"f"] == b"123",
-        },
-{
-            "name": "Check HSET return value for existing key",
-            "command": "HSET",
-            "args": [b"k", b"f", b"foobarz"],
-            "returns": 0,
-            "depends": [{"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1}],
-            "expects": lambda cmds: cmds.data[b"k"][b"f"] == b"foobarz",
-        },
-{
-            "name": "Check HGET return value for nonexisting key",
-            "command": "HGET",
-            "args": [b"k", b"f"],
-            "returns": Response.NIL,
-        },
-{
-            "name": "Check HGET return value for nonexisting field",
-            "command": "HGET",
-            "args": [b"k", b"f"],
-            "returns": Response.NIL,
-            "depends": [
-                {"command": "HSET", "args": [b"k", b"another_f", b"123"], "returns": 1}
-            ],
-        },
-{
-            "name": "Check HGET return value for existing key",
-            "command": "HGET",
-            "args": [b"k", b"f"],
-            "returns": b"foobarz",
-            "depends": [
-                {"command": "HSET", "args": [b"k", b"f", b"foobarz"], "returns": 1}
-            ],
-        },
-{
-            "name": "Check HEXISTS return value for nonexisting key",
-            "command": "HEXISTS",
-            "args": [b"k", b"f"],
-            "returns": 0,
-        },
-{
-            "name": "Check HEXISTS return value for nonexisting field",
-            "command": "HEXISTS",
-            "args": [b"k", b"f"],
-            "returns": 0,
-            "depends": [
-                {"command": "HSET", "args": [b"k", b"another_f", b"123"], "returns": 1}
-            ],
-        },
-{
-            "name": "Check HEXISTS return value for existing field",
-            "command": "HEXISTS",
-            "args": [b"k", b"f"],
-            "returns": 1,
-            "depends": [{"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1}],
-        },
-{
-            "name": "Check HDEL return value for non existing key",
-            "command": "HDEL",
-            "args": [b"k", b"f"],
-            "returns": 0,
-        },
-{
-            "name": "Check HDEL return value for non existing fields",
-            "command": "HDEL",
-            "args": [b"k", b"f", b"z", b"a"],
-            "returns": 0,
-            "depends": [
-                {"command": "HSET", "args": [b"k", b"other_key", b"123"], "returns": 1}
-            ],
-        },
-{
-            "name": "Check HDEL return value for some existing and some not keys",
-            "command": "HDEL",
-            "args": [b"k", b"f", b"z", b"a", b"c"],
-            "returns": 3,
-            "depends": [
-                {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1},
-                {"command": "HSET", "args": [b"k", b"a", b"123"], "returns": 1},
-                {"command": "HSET", "args": [b"k", b"other_key", b"123"], "returns": 1},
-                {"command": "HSET", "args": [b"k", b"c", b"123"], "returns": 1},
-            ],
-        },
-{
-            "name": "Check HGETALL for nonexisting key",
-            "command": "HGETALL",
-            "args": [b"k"],
-            "returns": [],
-        },
-{
-            "name": "Check HGETALL after its only field was deleted",
-            "command": "HGETALL",
-            "args": [b"k"],
-            "returns": [],
-            "depends": [
-                {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1},
-                {"command": "HDEL", "args": [b"k", b"f"], "returns": 1},
-            ],
-            # redis deletes a hash that loses its last field
-            "expects": lambda cmds: b"k" not in cmds.data,
-        },
-{
-            "name": "Check HGETALL return value for existing key and fields",
-            "command": "HGETALL",
-            "args": [b"k"],
-            "returns": [b"f", b"123", b"a", b"234", b"other_key", b"345", b"c", b"456"],
-            "depends": [
-                {"command": "HSET", "args": [b"k", b"f", b"123"], "returns": 1},
-                {"command": "HSET", "args": [b"k", b"a", b"234"], "returns": 1},
-                {"command": "HSET", "args": [b"k", b"other_key", b"345"], "returns": 1},
-                {"command": "HSET", "args": [b"k", b"c", b"456"], "returns": 1},
-            ],
-        }]
-
-IDS = ["%03d: %s" % (i, item.get("name", "?")) for i, item in enumerate(ITEMS)]
+from .helpers import _commands
 
 
-@pytest.mark.parametrize("item", ITEMS, ids=IDS)
-def test_spec_item(item):
-    """One spec-table row as its own pytest case."""
-    run_spec_item(item)
+def test_hset_check_hset_return_value_for_nonexisting_key():
+    """Check HSET return value for nonexisting key"""
+    c = _commands()
+    ret = c.HSET(*[b"k", b"f", b"123"])
+    assert ret == protocolBuilder(1)
+    assert (c.data[b"k"][b"f"] == b"123")
+
+def test_hset_check_hset_return_value_for_existing_key():
+    """Check HSET return value for existing key"""
+    c = _commands()
+    c.HSET(*[b"k", b"f", b"123"])
+    ret = c.HSET(*[b"k", b"f", b"foobarz"])
+    assert ret == protocolBuilder(0)
+    assert (c.data[b"k"][b"f"] == b"foobarz")
+
+def test_hget_check_hget_return_value_for_nonexisting_key():
+    """Check HGET return value for nonexisting key"""
+    c = _commands()
+    ret = c.HGET(*[b"k", b"f"])
+    assert ret == protocolBuilder(Response.NIL)
+
+def test_hget_check_hget_return_value_for_nonexisting_field():
+    """Check HGET return value for nonexisting field"""
+    c = _commands()
+    c.HSET(*[b"k", b"another_f", b"123"])
+    ret = c.HGET(*[b"k", b"f"])
+    assert ret == protocolBuilder(Response.NIL)
+
+def test_hget_check_hget_return_value_for_existing_key():
+    """Check HGET return value for existing key"""
+    c = _commands()
+    c.HSET(*[b"k", b"f", b"foobarz"])
+    ret = c.HGET(*[b"k", b"f"])
+    assert ret == protocolBuilder(b'foobarz')
+
+def test_hexists_check_hexists_return_value_for_nonexisting_key():
+    """Check HEXISTS return value for nonexisting key"""
+    c = _commands()
+    ret = c.HEXISTS(*[b"k", b"f"])
+    assert ret == protocolBuilder(0)
+
+def test_hexists_check_hexists_return_value_for_nonexisting_field():
+    """Check HEXISTS return value for nonexisting field"""
+    c = _commands()
+    c.HSET(*[b"k", b"another_f", b"123"])
+    ret = c.HEXISTS(*[b"k", b"f"])
+    assert ret == protocolBuilder(0)
+
+def test_hexists_check_hexists_return_value_for_existing_field():
+    """Check HEXISTS return value for existing field"""
+    c = _commands()
+    c.HSET(*[b"k", b"f", b"123"])
+    ret = c.HEXISTS(*[b"k", b"f"])
+    assert ret == protocolBuilder(1)
+
+def test_hdel_check_hdel_return_value_for_non_existing_key():
+    """Check HDEL return value for non existing key"""
+    c = _commands()
+    ret = c.HDEL(*[b"k", b"f"])
+    assert ret == protocolBuilder(0)
+
+def test_hdel_check_hdel_return_value_for_non_existing_fields():
+    """Check HDEL return value for non existing fields"""
+    c = _commands()
+    c.HSET(*[b"k", b"other_key", b"123"])
+    ret = c.HDEL(*[b"k", b"f", b"z", b"a"])
+    assert ret == protocolBuilder(0)
+
+def test_hdel_check_hdel_return_value_for_some_existing_and_some_not_keys():
+    """Check HDEL return value for some existing and some not keys"""
+    c = _commands()
+    c.HSET(*[b"k", b"f", b"123"])
+    c.HSET(*[b"k", b"a", b"123"])
+    c.HSET(*[b"k", b"other_key", b"123"])
+    c.HSET(*[b"k", b"c", b"123"])
+    ret = c.HDEL(*[b"k", b"f", b"z", b"a", b"c"])
+    assert ret == protocolBuilder(3)
+
+def test_hgetall_check_hgetall_for_nonexisting_key():
+    """Check HGETALL for nonexisting key"""
+    c = _commands()
+    ret = c.HGETALL(*[b"k"])
+    assert ret == protocolBuilder([])
+
+def test_hgetall_check_hgetall_after_its_only_field_was_deleted():
+    """Check HGETALL after its only field was deleted"""
+    c = _commands()
+    c.HSET(*[b"k", b"f", b"123"])
+    c.HDEL(*[b"k", b"f"])
+    ret = c.HGETALL(*[b"k"])
+    assert ret == protocolBuilder([])
+    assert (b"k" not in c.data)
+
+def test_hgetall_check_hgetall_return_value_for_existing_key_and_fields():
+    """Check HGETALL return value for existing key and fields"""
+    c = _commands()
+    c.HSET(*[b"k", b"f", b"123"])
+    c.HSET(*[b"k", b"a", b"234"])
+    c.HSET(*[b"k", b"other_key", b"345"])
+    c.HSET(*[b"k", b"c", b"456"])
+    ret = c.HGETALL(*[b"k"])
+    assert ret == protocolBuilder([b'f', b'123', b'a', b'234', b'other_key', b'345', b'c', b'456'])
