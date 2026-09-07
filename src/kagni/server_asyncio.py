@@ -37,6 +37,10 @@ class RedisServerProtocol(asyncio.Protocol):
     throttles naturally through send_all."""
     HIGH_WATER = 1 << 20  # 1 MiB of unread replies
     LOW_WATER = HIGH_WATER // 2
+    # pub/sub pushes are unsolicited: a subscriber that stops reading
+    # gets disconnected once its output backlog passes this (redis drops
+    # slow pub/sub clients too)
+    PUBSUB_LIMIT = 32 << 20
 
     def __init__(self, command_handler):
         self._handler = command_handler
@@ -50,6 +54,8 @@ class RedisServerProtocol(asyncio.Protocol):
     def connection_made(self, transport):
         self._transport = transport
         self._loop = asyncio.get_running_loop()
+        # pub/sub pushes (messages, subscribe confirmations) write here
+        self._session.sender = self._push_frame
 
     def data_received(self, data):
         if self._transport is None:
@@ -66,6 +72,17 @@ class RedisServerProtocol(asyncio.Protocol):
             )
             self._transport.close()
         self._maybe_pause_reading()
+
+    def _push_frame(self, frame):
+        """Out-of-band write for pub/sub pushes; a subscriber whose
+        backlog exceeds the limit is disconnected, like redis."""
+        self._transport.write(frame)
+        if self._transport.get_write_buffer_size() > self.PUBSUB_LIMIT:
+            log.warning(
+                "closing pub/sub subscriber: output backlog exceeds %d bytes",
+                self.PUBSUB_LIMIT,
+            )
+            self._transport.close()
 
     def _maybe_pause_reading(self):
         """Pause the socket when the unread reply backlog grows past the
@@ -97,6 +114,8 @@ class RedisServerProtocol(asyncio.Protocol):
         if self._resume_handle is not None:
             self._resume_handle.cancel()
             self._resume_handle = None
+        self._handler.hub.remove_session(self._session)
+        self._session.sender = None
         self._transport = None
 
 

@@ -1,11 +1,9 @@
-"""List commands: assert-style spec battery (converted from the
-former *_sequence.py table; one function per scenario)."""
+"""List commands: per-command spec battery, one pytest case per scenario."""
 
-from kagni.constants import Response, SimpleString
-from kagni.resp import protocolBuilder, protocolParser
+from kagni.constants import Response
+from kagni.resp import protocolBuilder
 
 from .helpers import _commands
-
 
 def test_lpush_check_lpush_on_missing_key_creates_the_list():
     """Check LPUSH on missing key creates the list"""

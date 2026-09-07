@@ -84,7 +84,7 @@ _WRITE_COMMANDS = frozenset(
 # read-only commands never modify the keyspace; the rest (PING, CLIENT,
 # MULTI, ...) carry no flag at all, like redis' non-readonly flags
 _READONLY_COMMANDS = frozenset(
-    b"get mget strlen getrange substr lcs exists type ttl pttl keys scan dbsize touch expiretime pexpiretime "
+    b"get mget strlen getrange substr lcs exists type ttl pttl keys scan dbsize touch expiretime pexpiretime subscribe unsubscribe psubscribe punsubscribe publish pubsub "
     b"echo config info command "
     b"getbit bitcount bitpos bitfield_ro hscan sscan zscan "
     b"llen lindex lrange lpos "
@@ -147,6 +147,8 @@ _COMMAND_GROUPS = {
     b"touch": "generic", b"dbsize": "generic", b"flushdb": "server",
     b"flushall": "server", b"command": "server", b"config": "server",
     b"info": "server",
+    b"subscribe": "pubsub", b"unsubscribe": "pubsub", b"psubscribe": "pubsub",
+    b"punsubscribe": "pubsub", b"publish": "pubsub", b"pubsub": "pubsub",
 }
 
 

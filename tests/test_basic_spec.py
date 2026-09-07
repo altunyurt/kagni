@@ -1,11 +1,11 @@
-"""String / generic / admin commands: assert-style spec battery (converted from the
-former *_sequence.py table; one function per scenario)."""
+"""String / generic / admin commands: per-command spec battery, one pytest case per scenario."""
 
-from kagni.constants import Response, SimpleString
-from kagni.resp import protocolBuilder, protocolParser
+from kagni.constants import Response
+from kagni.constants import SimpleString
+from kagni.resp import protocolBuilder
+from kagni.resp import protocolParser
 
 from .helpers import _commands
-
 
 def test_command_check_command_returns_per_command_metadata():
     """Check COMMAND returns per-command metadata"""

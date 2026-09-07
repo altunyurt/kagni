@@ -13,33 +13,83 @@ from kagni.resp import RESPReader, ProtocolError
 log = logging.getLogger("kagni.trio")
 
 
+# pub/sub pushes are queued here before hitting the socket; a subscriber
+# that stops reading fills the queue and is disconnected (redis drops
+# slow pub/sub clients too)
+_PUBSUB_QUEUE = 4096
+
+
+async def _pubsub_writer(stream, receive_channel):
+    """Drains pushed pub/sub frames to the socket (all writes go through
+    this task so pushes and replies cannot interleave)."""
+    try:
+        async for frame in receive_channel:
+            await stream.send_all(frame)
+    except (trio.BrokenResourceError, trio.ClosedResourceError):
+        pass
+
+
 async def protocol_handler(stream, command_handler=None):
     """Per-connection RESP handler with incremental framing (partial
-    reads / pipelining / CRLF-safe bulk values)."""
+    reads / pipelining / CRLF-safe bulk values).  All writes - replies
+    and pub/sub pushes - go through one writer task so they cannot
+    interleave on the socket; a subscriber that stops reading fills the
+    push queue and is disconnected."""
     parser = RESPReader()
     session = Session()  # per-connection MULTI/EXEC state
-    try:
-        while True:
-            data = await stream.receive_some(65536)
-            if not data:
-                return
+    send_channel, receive_channel = trio.open_memory_channel(_PUBSUB_QUEUE)
+    scope = trio.CancelScope()
 
-            for request in parser.feed(data):
-                reply = command_handler.dispatch(request, session)
-                if reply is not None:
-                    await stream.send_all(reply)
-    except ProtocolError as exc:
-        log.warning("protocol error: %s", exc)
+    def push_frame(frame):
+        """Out-of-band write for pub/sub pushes; a full queue means the
+        subscriber is not reading - disconnect it, like redis."""
         try:
-            await stream.send_all(
-                b"-ERR Protocol error: " + str(exc).encode() + b"\r\n"
-            )
-        except (trio.BrokenResourceError, trio.ClosedResourceError):
+            send_channel.send_nowait(frame)
+        except trio.WouldBlock:
+            log.warning("disconnecting slow pub/sub subscriber")
+            scope.cancel()
+        except trio.BrokenResourceError:
             pass
+
+    session.sender = push_frame
+    error_line = None
+    try:
+        with scope:
+            async with trio.open_nursery() as nursery:
+                nursery.start_soon(_pubsub_writer, stream, receive_channel)
+                protocol_error = False
+                while not protocol_error:
+                    try:
+                        data = await stream.receive_some(65536)
+                        if not data:
+                            return
+                        for request in parser.feed(data):
+                            reply = command_handler.dispatch(request, session)
+                            if reply is not None:
+                                await send_channel.send(reply)
+                    except ProtocolError as exc:
+                        log.warning("protocol error: %s", exc)
+                        error_line = (
+                            b"-ERR Protocol error: " + str(exc).encode() + b"\r\n"
+                        )
+                        protocol_error = True
+                send_channel.close()
+    except trio.Cancelled:
+        pass  # slow-subscriber disconnect or shutdown
     except (trio.BrokenResourceError, trio.ClosedResourceError):
         pass
     except Exception:
         log.exception("connection handler failed")
+    finally:
+        command_handler.hub.remove_session(session)
+        session.sender = None
+        send_channel.close()
+    if error_line is not None:
+        # the writer task has ended: send the protocol error directly
+        try:
+            await stream.send_all(error_line)
+        except (trio.BrokenResourceError, trio.ClosedResourceError):
+            pass
 
 
 async def dumper(db, data, interval):

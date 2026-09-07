@@ -1,11 +1,10 @@
-"""Sorted-set commands: assert-style spec battery (converted from the
-former *_sequence.py table; one function per scenario)."""
+"""Sorted-set commands: per-command spec battery, one pytest case per scenario."""
 
-from kagni.constants import Response, SimpleString
-from kagni.resp import protocolBuilder, protocolParser
+from kagni.constants import Response
+from kagni.resp import protocolBuilder
+from kagni.resp import protocolParser
 
 from .helpers import _commands
-
 
 def test_zadd_check_zadd_return_value_for_new_members():
     """Check ZADD return value for new members"""

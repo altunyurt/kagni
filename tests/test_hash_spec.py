@@ -1,11 +1,9 @@
-"""Hash commands: assert-style spec battery (converted from the
-former *_sequence.py table; one function per scenario)."""
+"""Hash commands: per-command spec battery, one pytest case per scenario."""
 
-from kagni.constants import Response, SimpleString
-from kagni.resp import protocolBuilder, protocolParser
+from kagni.constants import Response
+from kagni.resp import protocolBuilder
 
 from .helpers import _commands
-
 
 def test_hset_check_hset_return_value_for_nonexisting_key():
     """Check HSET return value for nonexisting key"""

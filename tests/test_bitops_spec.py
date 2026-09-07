@@ -1,11 +1,8 @@
-"""Bitmap (SETBIT-family) commands: assert-style spec battery (converted from the
-former *_sequence.py table; one function per scenario)."""
+"""Bitmap (SETBIT-family) commands: per-command spec battery, one pytest case per scenario."""
 
-from kagni.constants import Response, SimpleString
-from kagni.resp import protocolBuilder, protocolParser
+from kagni.resp import protocolBuilder
 
 from .helpers import _commands
-
 
 def test_setbit_check_setbit_return_value_on_non_existing_key():
     """Check SETBIT return value on non existing key"""

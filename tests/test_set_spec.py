@@ -1,11 +1,10 @@
-"""Set commands: assert-style spec battery (converted from the
-former *_sequence.py table; one function per scenario)."""
+"""Set commands: per-command spec battery, one pytest case per scenario."""
 
-from kagni.constants import Response, SimpleString
-from kagni.resp import protocolBuilder, protocolParser
+from kagni.constants import Response
+from kagni.resp import protocolBuilder
+from kagni.resp import protocolParser
 
 from .helpers import _commands
-
 
 def test_sadd_check_sadd_return_value_for_nonexisting_key():
     """Check SADD return value for nonexisting key"""

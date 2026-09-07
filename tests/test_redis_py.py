@@ -329,3 +329,43 @@ def test_hash_field_expiries(r):
     # a past deadline deletes the field
     assert r.hexpireat("h", 1, "num") == [2]
     assert r.hexists("h", "num") == 0
+
+
+def test_pubsub(kagni_server):
+    client = redis.Redis(host=kagni_server.host, port=kagni_server.port, protocol=2)
+    other = redis.Redis(host=kagni_server.host, port=kagni_server.port, protocol=2)
+    pubsub = client.pubsub()
+    try:
+        pubsub.subscribe("chan", "pat")
+        assert client.publish("chan", "one") >= 1
+        message = None
+        for _ in range(50):
+            message = pubsub.get_message(timeout=0.1)
+            if message and message["type"] == "message":
+                break
+        assert message is not None
+        assert message["channel"] == b"chan"
+        assert message["data"] == b"one"
+        # pattern delivery
+        pubsub.psubscribe("n*")
+        assert other.publish("news", "two") >= 1
+        pmessage = None
+        for _ in range(50):
+            message = pubsub.get_message(timeout=0.1)
+            if message and message["type"] == "pmessage":
+                pmessage = message
+                break
+        assert pmessage is not None
+        assert pmessage["pattern"] == b"n*"
+        assert pmessage["data"] == b"two"
+        # unsubscribe releases the connection from subscribed mode
+        pubsub.unsubscribe("chan", "pat")
+        pubsub.punsubscribe("n*")
+        for _ in range(50):
+            if pubsub.get_message(timeout=0.1) is None:
+                break
+        assert other.set("k", "v") is True  # publisher unaffected
+    finally:
+        pubsub.close()
+        client.close()
+        other.close()
