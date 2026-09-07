@@ -19,14 +19,48 @@ log = logging.getLogger("kagni.trio")
 _PUBSUB_QUEUE = 4096
 
 
-async def _pubsub_writer(stream, receive_channel):
-    """Drains pushed pub/sub frames to the socket (all writes go through
-    this task so pushes and replies cannot interleave)."""
+async def _pubsub_writer(stream, receive_channel, send_lock, idle_event):
+    """Drains pushed pub/sub frames and subscribed-mode replies to the
+    socket.  Only active once the connection subscribes (the channel stays
+    empty otherwise); every send holds the shared lock so pushes can never
+    interleave with a reply mid-frame.  Sets *idle_event* whenever it has
+    drained the channel, which lets the read task's direct reply path know
+    no push can overtake it."""
     try:
-        async for frame in receive_channel:
-            await stream.send_all(frame)
-    except (trio.BrokenResourceError, trio.ClosedResourceError):
+        item = await receive_channel.receive()
+        while True:
+            await _locked_send(stream, item, send_lock)
+            try:
+                item = receive_channel.receive_nowait()
+            except trio.WouldBlock:
+                idle_event.set()
+                item = await receive_channel.receive()
+    except (trio.BrokenResourceError, trio.ClosedResourceError,
+            trio.EndOfChannel):
         pass
+
+
+async def _locked_send(stream, frames, send_lock):
+    """send_all under the connection's send lock.  Uncontended locks skip
+    the acquire/release checkpoints (the hot path - the writer task only
+    wakes once the connection subscribes)."""
+    try:
+        send_lock.acquire_nowait()
+    except trio.WouldBlock:
+        await send_lock.acquire()
+    try:
+        await stream.send_all(frames)
+    finally:
+        send_lock.release()
+
+
+async def _direct_send(stream, frames, send_lock, idle_event):
+    """Write one or more reply frames straight from the read task.  When
+    the writer task is mid-push (idle_event cleared) wait for it to drain
+    first, so a reply can never overtake an earlier push on the wire."""
+    if not idle_event.is_set():
+        await idle_event.wait()
+    await _locked_send(stream, frames, send_lock)
 
 
 def _connection_closed(exc):
@@ -51,6 +85,13 @@ async def protocol_handler(stream, command_handler=None):
     session = Session()  # per-connection MULTI/EXEC state
     send_channel, receive_channel = trio.open_memory_channel(_PUBSUB_QUEUE)
     scope = trio.CancelScope()
+    # serializes every write to the stream: replies from the read task and
+    # pushes from the writer task can never interleave mid-frame.  idle_event
+    # is set whenever the writer has drained the channel; direct replies wait
+    # on it so nothing can overtake a queued push.
+    send_lock = trio.Lock()
+    idle_event = trio.Event()
+    idle_event.set()
 
     def push_frame(frame):
         """Out-of-band write for pub/sub pushes; a full queue means the
@@ -68,17 +109,43 @@ async def protocol_handler(stream, command_handler=None):
     try:
         with scope:
             async with trio.open_nursery() as nursery:
-                nursery.start_soon(_pubsub_writer, stream, receive_channel)
+                nursery.start_soon(
+                    _pubsub_writer, stream, receive_channel, send_lock, idle_event
+                )
                 protocol_error = False
                 while not protocol_error:
                     try:
                         data = await stream.receive_some(65536)
                         if not data:
                             return
+                        # replies to an unsubscribed connection go straight to
+                        # the socket, batched per chunk (a pipelined chunk is
+                        # one send_all instead of one per command); a
+                        # subscribed connection routes everything through the
+                        # channel so pushes and confirmations keep their
+                        # order.  A mid-chunk SUBSCRIBE flushes the direct
+                        # replies first, a mid-chunk UNSUBSCRIBE leaves the
+                        # channel to drain before direct replies resume.
+                        direct = []
                         for request in parser.feed(data):
                             reply = command_handler.dispatch(request, session)
-                            if reply is not None:
+                            if reply is None:
+                                continue
+                            if session.subscribed:
+                                if direct:
+                                    await _direct_send(
+                                        stream, b"".join(direct),
+                                        send_lock, idle_event,
+                                    )
+                                    direct = []
+                                idle_event.clear()
                                 await send_channel.send(reply)
+                            else:
+                                direct.append(reply)
+                        if direct:
+                            await _direct_send(
+                                stream, b"".join(direct), send_lock, idle_event
+                            )
                     except ProtocolError as exc:
                         log.warning("protocol error: %s", exc)
                         error_line = (
