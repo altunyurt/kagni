@@ -27,6 +27,28 @@ expect a modest single-process op rate, the 153 commands below, and no
 blocking commands, replication or streams. Redis 7.4 (LTS) is the
 compatibility target - the implemented subset behaves identically in 8.x.
 
+### How it compares
+
+- **vs redis** - run redis when you can: it wins on throughput, breadth
+  (streams, blocking ops, GEO, scripting, RESP3, cluster/HA), memory
+  efficiency and operational maturity. kagni is for the places redis
+  cannot go: pip-installable with no native build or system package,
+  embeddable inside your own asyncio/trio event loop (`kagni.embed`),
+  permissive-licensed, and snapshotting to sqlite files you can read
+  with standard tooling.
+- **vs fakeredis** - fakeredis is a client-library simulation: fastest
+  for in-process unit tests that never touch the wire. kagni is a real
+  RESP server over TCP/unix sockets whose subset is verified
+  byte-for-byte against a real redis (the differential batteries): use
+  it when
+  the wire matters - pipelining, error strings, pub/sub and keyspace
+  notifications, non-Python clients, or the same artifact in tests and
+  production-small without environment drift.
+
+In one sentence: *a redis-compatible server you can pip-install, embed
+in your event loop, and trust byte-for-byte for the subset it
+implements - for everything else, use redis.*
+
 ## Running
 
 Requires Python 3.11+ (developed on 3.13).
