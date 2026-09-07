@@ -29,6 +29,18 @@ async def _pubsub_writer(stream, receive_channel):
         pass
 
 
+def _connection_closed(exc):
+    """True when an exception only means the peer went away - possibly
+    wrapped in a nursery ExceptionGroup (a peer resetting the socket
+    while the writer task is mid-send surfaces as a group)."""
+    if isinstance(exc, (trio.BrokenResourceError, trio.ClosedResourceError,
+                        trio.Cancelled)):
+        return True
+    if isinstance(exc, BaseExceptionGroup):
+        return all(_connection_closed(e) for e in exc.exceptions)
+    return False
+
+
 async def protocol_handler(stream, command_handler=None):
     """Per-connection RESP handler with incremental framing (partial
     reads / pipelining / CRLF-safe bulk values).  All writes - replies
@@ -73,13 +85,19 @@ async def protocol_handler(stream, command_handler=None):
                             b"-ERR Protocol error: " + str(exc).encode() + b"\r\n"
                         )
                         protocol_error = True
+                    except (trio.BrokenResourceError, trio.ClosedResourceError):
+                        # the peer reset the connection: a quiet exit, not
+                        # an error (redis-benchmark and friends kill
+                        # connections without a farewell)
+                        return
                 send_channel.close()
     except trio.Cancelled:
         pass  # slow-subscriber disconnect or shutdown
-    except (trio.BrokenResourceError, trio.ClosedResourceError):
-        pass
-    except Exception:
-        log.exception("connection handler failed")
+    except Exception as exc:
+        # peer resets can surface here as a nursery ExceptionGroup when
+        # the writer task hits the dead socket at the same moment
+        if not _connection_closed(exc):
+            log.exception("connection handler failed")
     finally:
         command_handler.hub.remove_session(session)
         session.sender = None
