@@ -129,6 +129,25 @@ port (in-memory, nothing on disk) and tears it down afterwards:
 fixture scopes.  kagni speaks RESP2: point redis-py >= 8 at it with
 `protocol=2` (its default `HELLO 3` probe gets an honest `NOPROTO`).
 
+### In-process embedding
+
+Instead of a subprocess, `kagni.embed.serve()` runs the server inside
+the caller's own event loop - asyncio or trio, detected from the
+running context (`loop="auto"`, or force one).  It binds an ephemeral
+port and stops when the block exits (listeners and connections closed,
+final snapshot written when a snapshot file is configured):
+
+    import kagni.embed
+
+    async with kagni.embed.serve() as server:          # any asyncio/trio app
+        r = redis.asyncio.Redis(host=server.host, port=server.port,
+                                protocol=2)
+        assert await r.set("k", "v")
+
+`server.host` / `server.port` / `server.url` describe the endpoint;
+pass `db_path="server.db"` to enable sqlite snapshots, exactly like the
+CLI's `--db`.
+
 ### Known gaps
 
 - **The differential battery needs a redis binary**, so it only runs in
