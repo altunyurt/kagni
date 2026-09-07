@@ -1,10 +1,12 @@
 """Run a kagni server inside your own event loop - no subprocess.
 
-The project premise is a real Redis-protocol endpoint for applications
-and their tests, and embedding is the direct form of that: the server
-shares the caller's loop (asyncio or trio, whichever is running), on an
-ephemeral port, with nothing on disk unless you ask for a snapshot
-file::
+This is a server in your process, not a library you call: clients
+(redis-py included) still connect over TCP loopback, exactly as they
+would to the daemon - that wire is the point, since the project premise
+is a real Redis-protocol endpoint for applications and their tests.
+The gain is topology: the server shares the caller's loop (asyncio or
+trio, whichever is running), on an ephemeral port, with nothing on disk
+unless you ask for a snapshot file::
 
     # asyncio app
     async with kagni.embed.serve() as server:

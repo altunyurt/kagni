@@ -13,11 +13,12 @@ It is a real RESP server that lives comfortably inside Python workflows:
   persistence modes, no containers and no native builds. For component
   tests the command layer is importable directly, no sockets needed.
   (Alternatives like fakeredis run in-process only and speak no sockets.)
-- **Embedded** - `kagni.embed` runs the server inside your own event loop
-  (asyncio or trio), no subprocess; or run it as a sidecar daemon next to
-  your service (`--db :memory:` for a pure-RAM cache, a sqlite snapshot
-  file for durability, `--no-save` to serve a seed dataset without ever
-  writing back).
+- **In-process server** - `kagni.embed` runs a real RESP server inside
+  your own event loop (asyncio or trio): same wire semantics as the
+  daemon, no second process to orchestrate; or run a sidecar daemon next
+  to your service (`--db :memory:` for a pure-RAM cache, a sqlite
+  snapshot file for durability, `--no-save` to serve a seed dataset
+  without ever writing back).
 - **Native Python** - `pip install .` then `kagni` or `python -m kagni`;
   pick the event loop (asyncio+uvloop or trio); sqlite snapshots are
   inspectable with standard tooling.
@@ -33,7 +34,7 @@ compatibility target - the implemented subset behaves identically in 8.x.
   (streams, blocking ops, GEO, scripting, RESP3, cluster/HA), memory
   efficiency and operational maturity. kagni is for the places redis
   cannot go: pip-installable with no native build or system package,
-  embeddable inside your own asyncio/trio event loop (`kagni.embed`),
+  runnable inside your own asyncio/trio event loop (`kagni.embed`),
   permissive-licensed, and snapshotting to sqlite files you can read
   with standard tooling.
 - **vs fakeredis** - fakeredis is a client-library simulation: fastest
@@ -45,8 +46,8 @@ compatibility target - the implemented subset behaves identically in 8.x.
   notifications, non-Python clients, or the same artifact in tests and
   production-small without environment drift.
 
-In one sentence: *a redis-compatible server you can pip-install, embed
-in your event loop, and trust byte-for-byte for the subset it
+In one sentence: *a redis-compatible server you can pip-install, run
+inside your event loop, and trust byte-for-byte for the subset it
 implements - for everything else, use redis.*
 
 ## Running
@@ -179,14 +180,24 @@ def test_cache(kagni_server):
 `kagni.testing.start_server()` is the fixture-free version, for your own
 fixture scopes.
 
-### In-process embedding
+### In-process server
 
-Instead of a subprocess, `kagni.embed.serve()` runs the server inside the
-caller's own event loop - asyncio or trio, detected from the running
-context (`loop="auto"`, or force one with `loop="asyncio"`/`"trio"`). It
-binds an ephemeral port and stops cleanly when the block exits: listeners
-and active connections closed, snapshot dumper cancelled, final snapshot
-written when a snapshot file is configured.
+`kagni.embed.serve()` runs the server inside the caller's own event loop
+- asyncio or trio, detected from the running context (`loop="auto"`, or
+force one with `loop="asyncio"`/`"trio"`). It binds an ephemeral port
+and stops cleanly when the block exits: listeners and active connections
+closed, snapshot dumper cancelled, final snapshot written when a
+snapshot file is configured.
+
+Note what this is and is not: it is a *server in your process*, not a
+library you call - clients still connect over TCP loopback (or a unix
+socket), and redis-py cannot talk to anything but a socket. That is the
+point, not a limitation: the in-process server speaks the same wire
+protocol as the daemon, so code and tests exercise the identical path a
+real redis client would. What you gain is topology (no subprocess, no
+container, lifecycle tied to your loop), not a faster-than-TCP access
+path. For socket-free in-process access, the command layer
+(`kagni.commands`) or fakeredis are the tools.
 
 Asyncio app:
 
